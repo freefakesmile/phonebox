@@ -288,6 +288,10 @@ public sealed class SensorsConfig
     /// itself refreshes at its own "Hardware polling period", which should be set as low.</summary>
     public int AfterburnerPollMs { get; set; } = DefaultPollMs;
     public const int DefaultPollMs = 1000, MinPollMs = 100, MaxPollMs = 2000;
+    /// <summary>Which Afterburner sensors reach the phone, as their keys with or without "ab." ("framerate,
+    /// frametime-max"); empty = all of them. The others are still read (the CPU temperature, for one) but not sent, so
+    /// a sensor that changes on every reading doesn't make the phone fetch the list again.</summary>
+    public string AfterburnerKeys { get; set; } = "";
 }
 
 public sealed class FeaturesConfig
@@ -721,6 +725,7 @@ public sealed partial class ConfigStore(string path)
         c.Sensors.Source = c.Sensors.Source?.Trim().ToLowerInvariant() is SensorsConfig.Afterburner ? SensorsConfig.Afterburner : SensorsConfig.Lhm;
         c.Sensors.AfterburnerPollMs = c.Sensors.AfterburnerPollMs <= 0 ? SensorsConfig.DefaultPollMs
             : Math.Clamp(c.Sensors.AfterburnerPollMs, SensorsConfig.MinPollMs, SensorsConfig.MaxPollMs);
+        c.Sensors.AfterburnerKeys = c.Sensors.AfterburnerKeys?.Trim() ?? "";
         c.OpenCode ??= new();
         c.OpenCode.TimeoutSec = Math.Clamp(c.OpenCode.TimeoutSec, 10, 3600);
         c.OpenCode.AlwaysCountdownSec = Math.Clamp(c.OpenCode.AlwaysCountdownSec, 0, 60);

@@ -528,6 +528,8 @@
       's.pageKeys.hint': 'Work in every program. The phone gets a volume key press, which the panel turns into a page flip (“The phone’s volume keys switch pages” must stay on). Combinations like Ctrl+Alt+Left, Ctrl+Shift+F9, Win+Alt+PageDown.',
       's.sensors.source': 'Hardware sensors',
       's.sensors.poll': 'Afterburner read interval (ms, 100–2000)',
+      's.sensors.keys': 'Afterburner sensors sent to the phone (empty = all)',
+      's.sensors.keysHint': 'Keys without "ab.", separated by commas. Sensors that aren’t listed are still read but not sent, so one that changes on every reading doesn’t make the phone fetch the values again. Rules and shortcuts see only the ones sent.',
       's.sensors.pollHint': "Under 1000 ms the values reach the phone at this rate, so charts move faster (a little more work for the agent). ab.frametime-max is always the slowest frame of the last second. Set Afterburner's Hardware polling period (Settings › Monitoring) to the same value.",
       's.sensors.lhm': 'LibreHardwareMonitor (CPU temperature)',
       's.sensors.afterburner': 'MSI Afterburner (CPU temperature, FPS and every sensor it monitors)',

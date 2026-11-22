@@ -129,6 +129,15 @@ public sealed class AfterburnerTests : IDisposable
     }
 
     [Fact]
+    public void The_list_of_sensors_to_send_takes_keys_with_or_without_the_prefix()
+    {
+        Assert.Null(AfterburnerMonitor.AllowedKeys(""));
+        Assert.Null(AfterburnerMonitor.AllowedKeys(" , "));
+        var keys = AfterburnerMonitor.AllowedKeys("framerate, ab.Frametime-Max;gpu-temperature\nfan-tachometer")!;
+        Assert.Equal(["ab.fan-tachometer", "ab.framerate", "ab.frametime-max", "ab.gpu-temperature"], keys.Order());
+    }
+
+    [Fact]
     public void The_read_interval_is_kept_within_bounds()
     {
         SensorsConfig Read(string json)

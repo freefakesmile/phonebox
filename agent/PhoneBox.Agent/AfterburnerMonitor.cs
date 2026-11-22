@@ -30,6 +30,25 @@ public sealed class AfterburnerMonitor(PushStore push, ILogger<AfterburnerMonito
     internal bool Selected => config?.Get().Sensors.Source == SensorsConfig.Afterburner;
     private int PollMs => config?.Get().Sensors.AfterburnerPollMs ?? SensorsConfig.DefaultPollMs;
     internal const string FrametimeMaxName = "Frametime max"; // published as ab.frametime-max
+    private string? _allowedText;
+    private HashSet<string>? _allowed;
+
+    /// <summary>"framerate, ab.frametime-max" → {"ab.framerate", "ab.frametime-max"}; null (everything) when empty.</summary>
+    internal static HashSet<string>? AllowedKeys(string? text)
+    {
+        var keys = (text ?? "").Split([',', ';', ' ', '\n', '\t'], StringSplitOptions.RemoveEmptyEntries)
+            .Select(k => k.Trim().ToLowerInvariant())
+            .Select(k => k.StartsWith(KeyPrefix) ? k : KeyPrefix + k)
+            .ToHashSet();
+        return keys.Count == 0 ? null : keys;
+    }
+
+    private HashSet<string>? Allowed()
+    {
+        var text = config?.Get().Sensors.AfterburnerKeys ?? "";
+        if (text != _allowedText) { _allowedText = text; _allowed = AllowedKeys(text); }
+        return _allowed;
+    }
 
     /// <summary>Afterburner's "CPU temperature", or null when it is not selected, not running or not monitoring it.</summary>
     public double? CpuTemp
@@ -102,11 +121,12 @@ public sealed class AfterburnerMonitor(PushStore push, ILogger<AfterburnerMonito
     private bool Publish(IReadOnlyList<Reading> readings)
     {
         var changed = false;
+        var allowed = Allowed();
         var current = new HashSet<string>();
         foreach (var r in readings)
         {
-            // no data (FPS without a game) counts as absent: its key is dropped below
-            if (!Valid(r.Value) || Key(r) is not { } key || !current.Add(key)) continue;
+            // no data (FPS without a game) counts as absent, and so does a sensor that isn't on the list: dropped below
+            if (!Valid(r.Value) || Key(r) is not { } key || allowed?.Contains(key) == false || !current.Add(key)) continue;
             var v = Round(r.Value);
             if (_sent.TryGetValue(key, out var old) && old == v) continue; // unchanged: the phone needn't refetch
             _sent[key] = v;
