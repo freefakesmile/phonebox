@@ -521,6 +521,7 @@
       's.features.hint': 'Switch off what you do not use: the agent then does no work for it at all.',
       's.features.ai': 'AI integrations (coding-agent sessions, AI quotas and CodexBar, permission prompts on the phone)',
       's.features.processes': 'Process list (Processes widget)',
+      's.features.media': 'Now playing (Media widgets and media controls)',
       's.cursor.title': 'Cursor sessions',
       's.cursor.hint': 'Show recent Cursor agent chats on the AI sessions widget (off by default). Only the last message\'s role is kept; chat text is never shown, stored or sent. Project names use the folder basename from Cursor\'s workspaceStorage.',
       's.cursor.sessions': 'Show Cursor sessions',

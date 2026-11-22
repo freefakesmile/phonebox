@@ -29,7 +29,10 @@ public static class StateSignal
         if (before is null || after is null) return before is not null || after is not null;
         if (before.Title != after.Title || before.Artist != after.Artist || before.App != after.App
             || before.Playing != after.Playing || before.DurMs != after.DurMs || before.ArtId != after.ArtId) return true;
-        // a seek: the position moved by clearly more than the second or two of playback between two readings
-        return Math.Abs(after.PosMs - before.PosMs) > 3000;
+        // a seek: the position moved by clearly more than the playback between two readings (which may be seconds apart)
+        var expected = before.PosMs;
+        if (before.Playing && before.SampledAt != 0 && after.SampledAt > before.SampledAt)
+            expected += (long)System.Diagnostics.Stopwatch.GetElapsedTime(before.SampledAt, after.SampledAt).TotalMilliseconds;
+        return Math.Abs(after.PosMs - expected) > 3000;
     }
 }

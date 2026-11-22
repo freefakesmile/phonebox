@@ -273,6 +273,8 @@ public sealed class FeaturesConfig
     public bool Ai { get; set; } = true;
     /// <summary>The process list (Processes widget, top processes): off, the agent never enumerates processes.</summary>
     public bool Processes { get; set; } = true;
+    /// <summary>Now playing (Media widgets, media controls, media rules): off, the agent never asks the player.</summary>
+    public bool Media { get; set; } = true;
 }
 
 public sealed class CursorConfig

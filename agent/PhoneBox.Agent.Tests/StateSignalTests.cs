@@ -41,6 +41,17 @@ public sealed class StateSignalTests
         Assert.False(StateSignal.MediaChanged(a, a with { PosMs = 2200 }));          // just time passing
         Assert.True(StateSignal.MediaChanged(a, a with { Playing = false }));          // pause
         Assert.True(StateSignal.MediaChanged(a, a with { Title = "Two", PosMs = 0 })); // next track
+    }
+
+    [Fact]
+    public void Media_read_seconds_apart_is_not_a_seek_while_playing()
+    {
+        var f = System.Diagnostics.Stopwatch.Frequency;
+        var t0 = System.Diagnostics.Stopwatch.GetTimestamp();
+        var a = new MediaSnapshot("Spotify", "One", "X", "", true, 10_000, 200_000, 1, true) { SampledAt = t0 };
+        Assert.False(StateSignal.MediaChanged(a, a with { PosMs = 20_000, SampledAt = t0 + 10 * f }));  // 10 s of playback
+        Assert.True(StateSignal.MediaChanged(a, a with { PosMs = 60_000, SampledAt = t0 + 10 * f }));   // a seek forward
+        Assert.True(StateSignal.MediaChanged(a, a with { PosMs = 10_000, SampledAt = t0 + 10 * f }));   // a seek back
         Assert.True(StateSignal.MediaChanged(a, a with { PosMs = 90_000 }));           // a seek, not 1 s of playback
         Assert.True(StateSignal.MediaChanged(null, a));
         Assert.True(StateSignal.MediaChanged(a, null));

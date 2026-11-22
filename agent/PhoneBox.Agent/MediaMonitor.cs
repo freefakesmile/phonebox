@@ -3,17 +3,30 @@ using Windows.Media.Control;
 namespace PhoneBox.Agent;
 
 /// <summary>Watches and controls the current Windows media session (Spotify, browsers, ...).</summary>
-public sealed class MediaMonitor(ILogger<MediaMonitor> log) : BackgroundService
+public sealed class MediaMonitor(ILogger<MediaMonitor> log, ConfigStore? config = null) : BackgroundService
 {
+    // Windows reports a new track, a pause or a seek as an event, and the phone counts the position on by itself (AgeMs),
+    // so the session is read when something happened, not every second. FallbackPoll is a safety net for a player whose
+    // events go missing; for SettleMs after a new track it reads each second while its thumbnail settles.
+    internal static readonly TimeSpan FallbackPoll = TimeSpan.FromSeconds(10);
+    private const long SettleMs = 8000;
+    // a timeline event that moves the position by more than this against the count is a seek
+    private const long SeekMs = 1500;
+
     private GlobalSystemMediaTransportControlsSessionManager? _mgr;
     private volatile MediaSnapshot? _snap;
     private readonly MediaArtworkCache _art = new();
     private readonly SemaphoreSlim _pollGate = new(1, 1);
+    private readonly SemaphoreSlim _wake = new(0, 1);
     private GlobalSystemMediaTransportControlsSession? _observed;
     private long _revision;
+    private long _settleUntil;
 
     public AlbumArt? Art => _art.Current;
     public MediaSnapshot? Snapshot() => _snap;
+
+    /// <summary>Settings › General › Features › Media: off, the agent never talks to the media session.</summary>
+    internal bool Enabled => config?.Get().Features.Media != false;
 
     protected override async Task ExecuteAsync(CancellationToken ct)
     {
@@ -21,12 +34,19 @@ public sealed class MediaMonitor(ILogger<MediaMonitor> log) : BackgroundService
         {
             while (!ct.IsCancellationRequested)
             {
+                if (!Enabled)
+                {
+                    Detach();
+                    await Task.Delay(2000, ct);
+                    continue;
+                }
                 try
                 {
                     if (_mgr is null)
                     {
                         _mgr = await GlobalSystemMediaTransportControlsSessionManager.RequestAsync();
                         _mgr.CurrentSessionChanged += SessionChanged;
+                        Settle();
                     }
                     await Poll(ct);
                 }
@@ -36,25 +56,71 @@ public sealed class MediaMonitor(ILogger<MediaMonitor> log) : BackgroundService
                     log.LogDebug("media: {Msg}", ex.Message);
                     _snap = null;
                 }
-                await Task.Delay(1000, ct);
+                var settling = Environment.TickCount64 < Interlocked.Read(ref _settleUntil);
+                try { await _wake.WaitAsync(settling ? TimeSpan.FromSeconds(1) : FallbackPoll, ct); }
+                catch (OperationCanceledException) when (ct.IsCancellationRequested) { break; }
             }
         }
-        finally
-        {
-            if (_mgr is not null) _mgr.CurrentSessionChanged -= SessionChanged;
-            Observe(null);
-            _art.Clear();
-        }
+        finally { Detach(); }
     }
 
-    private void SessionChanged(GlobalSystemMediaTransportControlsSessionManager sender, CurrentSessionChangedEventArgs args) => Interlocked.Increment(ref _revision);
-    private void PropertiesChanged(GlobalSystemMediaTransportControlsSession sender, MediaPropertiesChangedEventArgs args) => Interlocked.Increment(ref _revision);
+    private void Detach()
+    {
+        if (_mgr is not null) { _mgr.CurrentSessionChanged -= SessionChanged; _mgr = null; }
+        Observe(null);
+        _snap = null;
+        _art.Clear();
+    }
+
+    private void Wake()
+    {
+        try { if (_wake.CurrentCount == 0) _wake.Release(); }
+        catch (SemaphoreFullException) { }
+    }
+
+    private void Settle() => Interlocked.Exchange(ref _settleUntil, Environment.TickCount64 + SettleMs);
+
+    private void SessionChanged(GlobalSystemMediaTransportControlsSessionManager sender, CurrentSessionChangedEventArgs args)
+    { Interlocked.Increment(ref _revision); Settle(); Wake(); }
+    private void PropertiesChanged(GlobalSystemMediaTransportControlsSession sender, MediaPropertiesChangedEventArgs args)
+    { Interlocked.Increment(ref _revision); Settle(); Wake(); }
+    private void PlaybackChanged(GlobalSystemMediaTransportControlsSession sender, PlaybackInfoChangedEventArgs args) => Wake();
+
+    // Some players publish their timeline every second or so; only a seek or a new length is worth a full reading.
+    private void TimelineChanged(GlobalSystemMediaTransportControlsSession sender, TimelinePropertiesChangedEventArgs args)
+    {
+        try
+        {
+            if (_snap is not { } snap) { Wake(); return; }
+            var (pos, dur) = Position(sender.GetTimelineProperties(), snap.Playing);
+            var expected = snap.PosMs + (snap.Playing ? snap.AgeMs : 0);
+            if ((long)dur.TotalMilliseconds != snap.DurMs || Math.Abs((long)pos.TotalMilliseconds - expected) > SeekMs) Wake();
+        }
+        catch { Wake(); }
+    }
+
     private void Observe(GlobalSystemMediaTransportControlsSession? session)
     {
         if (ReferenceEquals(session, _observed)) return;
-        if (_observed is not null) _observed.MediaPropertiesChanged -= PropertiesChanged;
+        if (_observed is not null)
+        {
+            _observed.MediaPropertiesChanged -= PropertiesChanged;
+            _observed.PlaybackInfoChanged -= PlaybackChanged;
+            _observed.TimelinePropertiesChanged -= TimelineChanged;
+        }
         _observed = session;
-        if (_observed is not null) _observed.MediaPropertiesChanged += PropertiesChanged;
+        if (_observed is not null)
+        {
+            _observed.MediaPropertiesChanged += PropertiesChanged;
+            _observed.PlaybackInfoChanged += PlaybackChanged;
+            _observed.TimelinePropertiesChanged += TimelineChanged;
+        }
+    }
+
+    private static (TimeSpan Pos, TimeSpan Dur) Position(GlobalSystemMediaTransportControlsSessionTimelineProperties tl, bool playing)
+    {
+        var (pos, dur) = Position(tl, playing);
+        return (pos, dur);
     }
 
     private async Task Poll(CancellationToken ct = default)
@@ -72,7 +138,8 @@ public sealed class MediaMonitor(ILogger<MediaMonitor> log) : BackgroundService
 
     private async Task PollCore(CancellationToken ct)
     {
-        var s = _mgr!.GetCurrentSession();
+        if (_mgr is not { } mgr) { _snap = null; return; }
+        var s = mgr.GetCurrentSession();
         Observe(s);
         if (s is null) { _snap = null; _art.Clear(); return; }
         var revision = Interlocked.Read(ref _revision);
@@ -99,12 +166,7 @@ public sealed class MediaMonitor(ILogger<MediaMonitor> log) : BackgroundService
         catch (Exception ex) { log.LogDebug("cover art: {Msg}", ex.Message); }
 
         var sampledAt = System.Diagnostics.Stopwatch.GetTimestamp();
-        var pos = tl.Position;
-        if (playing && tl.LastUpdatedTime.Year > 2000)
-            pos += DateTimeOffset.Now - tl.LastUpdatedTime;
-        var dur = tl.EndTime - tl.StartTime;
-        if (dur > TimeSpan.Zero && pos > dur) pos = dur;
-        if (pos < TimeSpan.Zero) pos = TimeSpan.Zero;
+        var (pos, dur) = Position(tl, playing);
 
         _snap = new MediaSnapshot(
             App: FriendlyApp(s.SourceAppUserModelId),
@@ -120,7 +182,7 @@ public sealed class MediaMonitor(ILogger<MediaMonitor> log) : BackgroundService
 
     public async Task<bool> Control(string action, long? ms)
     {
-        var s = _mgr?.GetCurrentSession();
+        var s = Enabled ? _mgr?.GetCurrentSession() : null;
         if (s is null)
         {
             // No session: send the media key instead (wakes up Spotify, for example).
@@ -136,6 +198,7 @@ public sealed class MediaMonitor(ILogger<MediaMonitor> log) : BackgroundService
             _ => false,
         };
         try { await Poll(); } catch { }
+        Wake();
         return ok;
     }
 

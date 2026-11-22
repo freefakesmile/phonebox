@@ -20,7 +20,22 @@ public sealed class FeatureToggleTests : IDisposable
         Assert.True(Store("{}").Get().Features.Ai);
         Assert.True(Store("{}").Get().Features.Processes);
         var c = Store("{\"features\":null}").Get();
-        Assert.True(c.Features.Ai && c.Features.Processes);
+        Assert.True(c.Features.Ai && c.Features.Processes && c.Features.Media);
+    }
+
+    [Fact]
+    public async Task Media_off_reads_no_media_session()
+    {
+        var media = new MediaMonitor(NullLogger<MediaMonitor>.Instance, Store("{\"features\":{\"media\":false}}"));
+        Assert.False(media.Enabled);
+        using var cts = new CancellationTokenSource();
+        await media.StartAsync(cts.Token);
+        await Task.Delay(300);
+        Assert.Null(media.Snapshot());
+        Assert.Null(media.Art);
+        Assert.False(await media.Control("next", null));
+        await cts.CancelAsync();
+        await media.StopAsync(CancellationToken.None);
     }
 
     [Fact]
