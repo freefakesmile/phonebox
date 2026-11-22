@@ -117,7 +117,7 @@ public sealed class MediaMonitor(ILogger<MediaMonitor> log, ConfigStore? config 
         if (_snap is not { } snap || _observed is not { } session) return true;
         var (pos, dur) = Position(session.GetTimelineProperties(), snap.Playing);
         var expected = snap.PosMs + (snap.Playing ? snap.AgeMs : 0);
-        return (long)dur.TotalMilliseconds != snap.DurMs || Math.Abs((long)pos.TotalMilliseconds - expected) > SeekMs;
+        return (long)Math.Max(0, dur.TotalMilliseconds) != snap.DurMs || Math.Abs((long)pos.TotalMilliseconds - expected) > SeekMs;
     }
 
     private void Observe(GlobalSystemMediaTransportControlsSession? session)
@@ -140,7 +140,12 @@ public sealed class MediaMonitor(ILogger<MediaMonitor> log, ConfigStore? config 
 
     private static (TimeSpan Pos, TimeSpan Dur) Position(GlobalSystemMediaTransportControlsSessionTimelineProperties tl, bool playing)
     {
-        var (pos, dur) = Position(tl, playing);
+        var pos = tl.Position;
+        if (playing && tl.LastUpdatedTime.Year > 2000)
+            pos += DateTimeOffset.Now - tl.LastUpdatedTime;
+        var dur = tl.EndTime - tl.StartTime;
+        if (dur > TimeSpan.Zero && pos > dur) pos = dur;
+        if (pos < TimeSpan.Zero) pos = TimeSpan.Zero;
         return (pos, dur);
     }
 
