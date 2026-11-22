@@ -76,9 +76,13 @@ public sealed class MediaMonitor(ILogger<MediaMonitor> log, ConfigStore? config 
                 Interlocked.Exchange(ref _timeline, 0);
                 _wake.Wait(0);
 
-                var settling = Environment.TickCount64 < Interlocked.Read(ref _settleUntil);
-                due = !await _wake.WaitAsync(settling ? TimeSpan.FromSeconds(1) : FallbackPoll, ct);
-                if (!due)
+                // the fallback counts from the last reading, not the last wake-up: a player that raises timeline events
+                // every second would otherwise keep pushing it back
+                var interval = Environment.TickCount64 < Interlocked.Read(ref _settleUntil) ? 1000 : (long)FallbackPoll.TotalMilliseconds;
+                var left = interval - (Environment.TickCount64 - lastPoll);
+                var woke = left > 0 && await _wake.WaitAsync(TimeSpan.FromMilliseconds(left), ct);
+                due = Environment.TickCount64 - lastPoll >= interval;
+                if (woke && !due)
                     await Task.Delay((int)Math.Max(CoalesceMs, MinGapMs - (Environment.TickCount64 - lastPoll)), ct);
             }
         }
