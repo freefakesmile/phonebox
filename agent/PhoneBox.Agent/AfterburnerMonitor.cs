@@ -62,40 +62,56 @@ public sealed class AfterburnerMonitor(PushStore push, ILogger<AfterburnerMonito
         }
     }
 
+    // How often the shared memory is looked at. Only a new Afterburner sample (its readings changed) is processed, so the
+    // agent follows Afterburner's own polling period instead of beating against it with a timer of its own.
+    private const int CheckMs = 100;
+
     protected override async Task ExecuteAsync(CancellationToken ct)
     {
-        // Every reading is published: with an interval under a second the stream is poked, so the phone gets it right
-        // away instead of at its next whole second, and the panel's charts move at the same rate. ab.frametime-max is
-        // the slowest frame seen in the last second, so its meaning doesn't depend on the interval.
+        // A new sample is published at most every PollMs; with an interval under a second the stream is poked, so the
+        // phone gets it right away and the panel's charts move at Afterburner's rate. ab.frametime-max is the slowest
+        // frame seen in the last second, so its meaning doesn't depend on the interval.
         var recent = new Queue<(long At, float Ms)>();
+        ulong? lastSample = null;
+        long lastPublish = long.MinValue / 2;
+        IReadOnlyList<Reading>? unsent = null;
         try
         {
             while (!ct.IsCancellationRequested)
             {
-                var poll = PollMs;
-                var delay = poll;
-                if (!Selected) { Clear(); recent.Clear(); delay = 2000; }
+                var delay = CheckMs;
+                if (!Selected) { Reset(); delay = 2000; }
                 else
                 {
                     try
                     {
-                        if (ReadShared() is { } readings)
+                        var now = Environment.TickCount64;
+                        var poll = PollMs;
+                        if (Fingerprint() is not { } sample) { Reset(); delay = 10_000; } // not running: look again now and then
+                        else
                         {
-                            _last = readings;
-                            var now = Environment.TickCount64;
-                            Interlocked.Exchange(ref _lastAt, now);
-                            if (Frametime(readings) is var ft and > 0) recent.Enqueue((now, ft));
+                            Interlocked.Exchange(ref _lastAt, now); // running: the last readings are still current
+                            if (sample != lastSample && ReadShared() is { } readings)
+                            {
+                                lastSample = sample;
+                                _last = readings;
+                                if (Frametime(readings) is var ft and > 0) recent.Enqueue((now, ft));
+                                unsent = readings;
+                            }
                             while (recent.Count > 0 && now - recent.Peek().At > 1000) recent.Dequeue();
-                            var changed = Publish(WithFrametimeMax(readings, recent.Count > 0 ? recent.Max(x => x.Ms) : 0));
-                            if (changed && poll < 1000) StateSignal.Poke();
+                            if (unsent is not null && now - lastPublish >= poll - CheckMs / 2)
+                            {
+                                var changed = Publish(WithFrametimeMax(unsent, recent.Count > 0 ? recent.Max(x => x.Ms) : 0));
+                                if (changed && poll < 1000) StateSignal.Poke();
+                                unsent = null;
+                                lastPublish = now;
+                            }
                         }
-                        else { Clear(); recent.Clear(); delay = 10_000; } // not running: look again now and then
                     }
                     catch (Exception ex)
                     {
                         log.LogDebug("afterburner: {Msg}", ex.Message);
-                        Clear();
-                        recent.Clear();
+                        Reset();
                         delay = 10_000;
                     }
                 }
@@ -103,7 +119,16 @@ public sealed class AfterburnerMonitor(PushStore push, ILogger<AfterburnerMonito
             }
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested) { }
-        finally { Clear(); }
+        finally { Reset(); }
+
+        void Reset()
+        {
+            Clear();
+            CloseMap();
+            recent.Clear();
+            lastSample = null;
+            unsent = null;
+        }
     }
 
     /// <summary>Afterburner's current frametime (ms), 0 without a game.</summary>
@@ -173,27 +198,64 @@ public sealed class AfterburnerMonitor(PushStore push, ILogger<AfterburnerMonito
     /// <summary>Whole numbers from 20 up (FPS, °C, W, MHz), one decimal below (frametime), two below 1 (volts).</summary>
     internal static double Round(float v) => Math.Abs(v) >= 20 ? Math.Round(v) : Math.Abs(v) >= 1 ? Math.Round(v, 1) : Math.Round(v, 2);
 
-    private static IReadOnlyList<Reading>? ReadShared()
+    private MemoryMappedFile? _map;
+    private MemoryMappedViewAccessor? _view;
+    private byte[] _buf = [];
+
+    /// <summary>The shared memory, opened once and kept open (null while Afterburner isn't running).</summary>
+    private MemoryMappedViewAccessor? View()
     {
+        if (_view is not null) return _view;
         if (!OperatingSystem.IsWindows()) return null;
-        MemoryMappedFile mmf;
-        try { mmf = MemoryMappedFile.OpenExisting(MapName, MemoryMappedFileRights.Read); }
+        try { _map = MemoryMappedFile.OpenExisting(MapName, MemoryMappedFileRights.Read); }
         catch (FileNotFoundException) { return null; }
-        using (mmf)
-        using (var view = mmf.CreateViewStream(0, 0, MemoryMappedFileAccess.Read))
+        _view = _map.CreateViewAccessor(0, 0, MemoryMappedFileAccess.Read);
+        return _view;
+    }
+
+    private void CloseMap()
+    {
+        _view?.Dispose(); _view = null;
+        _map?.Dispose(); _map = null;
+    }
+
+    /// <summary>
+    /// A hash of every sensor's value (no copy, nothing allocated): it changes when Afterburner writes a new sample. Null
+    /// when the memory isn't Afterburner's (it exited: the next look opens it again).
+    /// </summary>
+    private ulong? Fingerprint()
+    {
+        if (View() is not { } v || Layout(v) is not { } layout) { CloseMap(); return null; }
+        var (headerSize, count, entrySize) = layout;
+        var h = 14695981039346656037UL;
+        for (var i = 0; i < count; i++)
         {
-            var header = new byte[32];
-            if (view.Read(header, 0, header.Length) < 20) return null;
-            var headerSize = BitConverter.ToUInt32(header, 8);
-            var count = BitConverter.ToUInt32(header, 12);
-            var entrySize = BitConverter.ToUInt32(header, 16);
-            if (headerSize is < 20 or > 4096 || count > MaxEntries || entrySize is < MinEntrySize or > 8192) return null;
-            var all = new byte[headerSize + count * entrySize];
-            view.Position = 0;
-            var read = 0;
-            while (read < all.Length && view.Read(all, read, all.Length - read) is var n && n > 0) read += n;
-            return read == all.Length ? Parse(all) : null;
+            var at = headerSize + (long)i * entrySize + DataAt;
+            h = (h ^ v.ReadUInt64(at)) * 1099511628211UL;      // data and min
+            h = (h ^ v.ReadUInt64(at + 8)) * 1099511628211UL;  // max and flags
         }
+        return h;
+    }
+
+    /// <summary>The header's sizes, or default when the memory isn't (or no longer is) a whole Afterburner block.</summary>
+    private static (int HeaderSize, int Count, int EntrySize)? Layout(MemoryMappedViewAccessor v)
+    {
+        if (v.Capacity < 20 || v.ReadUInt32(0) != Signature) return null; // 0xDEAD: Afterburner exited
+        var headerSize = (int)v.ReadUInt32(8);
+        var count = (int)v.ReadUInt32(12);
+        var entrySize = (int)v.ReadUInt32(16);
+        if (headerSize is < 20 or > 4096 || count is < 0 or > MaxEntries || entrySize is < MinEntrySize or > 8192) return null;
+        return headerSize + (long)count * entrySize <= v.Capacity ? (headerSize, count, entrySize) : null;
+    }
+
+    private IReadOnlyList<Reading>? ReadShared()
+    {
+        if (View() is not { } v || Layout(v) is not { } layout) return null;
+        var (headerSize, count, entrySize) = layout;
+        var length = headerSize + count * entrySize;
+        if (_buf.Length < length) _buf = new byte[length];
+        v.ReadArray(0, _buf, 0, length);
+        return Parse(_buf.AsSpan(0, length));
     }
 
     /// <summary>The sensors in a copy of the shared memory, or null when it is not (or no longer) Afterburner's.</summary>
