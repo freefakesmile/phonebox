@@ -9,8 +9,11 @@ namespace PhoneBox.Agent;
 /// Now playing on Linux (MPRIS through playerctl) and macOS (system media through nowplaying-cli, with
 /// Spotify and Music AppleScript fallback). Same API as the Windows MediaMonitor.
 /// </summary>
-public sealed class MediaMonitor(ILogger<MediaMonitor> log) : BackgroundService
+public sealed class MediaMonitor(ILogger<MediaMonitor> log, ConfigStore? config = null) : BackgroundService
 {
+    /// <summary>Settings › General › Features › Media: off, the agent never starts the media tools.</summary>
+    internal bool Enabled => config?.Get().Features.Media != false;
+
     private const int MaxArtBytes = 5 * 1024 * 1024;
     private static readonly TimeSpan ArtDeadline = TimeSpan.FromSeconds(5);
     private static readonly HttpClient Http = CreatePublicHttpClient();
@@ -86,6 +89,7 @@ public sealed class MediaMonitor(ILogger<MediaMonitor> log) : BackgroundService
     {
         while (!ct.IsCancellationRequested)
         {
+            if (!Enabled) { _snap = null; Art = null; await Task.Delay(2000, ct); continue; }
             try { await Poll(); }
             catch (Exception ex) { log.LogDebug("media: {Msg}", ex.Message); _snap = null; }
             await _wake.WaitAsync(Idle ? IdlePoll : ActivePoll, ct);
@@ -528,6 +532,7 @@ public sealed class MediaMonitor(ILogger<MediaMonitor> log) : BackgroundService
 
     public async Task<bool> Control(string action, long? ms)
     {
+        if (!Enabled) return false;
         await RefreshIfIdle(); // which player to ask comes from the last reading
         bool ok;
         if (OperatingSystem.IsMacOS())
@@ -581,6 +586,7 @@ public sealed class MediaMonitor(ILogger<MediaMonitor> log) : BackgroundService
 
     public async Task<bool> PauseAsync()
     {
+        if (!Enabled) return false;
         await RefreshIfIdle();
         var snap = _snap;
         if (snap is not { Playing: true }) return false;
