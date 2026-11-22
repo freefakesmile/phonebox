@@ -41,7 +41,8 @@ public sealed class AdbServerTests : IDisposable
         while (true)
         {
             var head = new byte[4];
-            if (await s.ReadAtLeastAsync(head, 4, throwOnEndOfStream: false) < 4) return;
+            try { if (await s.ReadAtLeastAsync(head, 4, throwOnEndOfStream: false) < 4) return; }
+            catch (IOException) { return; } // the client hung up (a reset counts as closed too)
             var body = new byte[Convert.ToInt32(Encoding.ASCII.GetString(head), 16)];
             await s.ReadExactlyAsync(body);
             var req = Encoding.UTF8.GetString(body);
@@ -49,7 +50,8 @@ public sealed class AdbServerTests : IDisposable
             var reply = answer(req);
             if (reply is null) return; // close
             await s.WriteAsync(reply);
-            if (!req.StartsWith("host:transport:")) return; // one service per connection, as adb does
+            // one service per connection, as adb does; a refused transport ends it too
+            if (!req.StartsWith("host:transport:") || !reply.AsSpan().StartsWith("OKAY"u8)) return;
         }
     });
 
