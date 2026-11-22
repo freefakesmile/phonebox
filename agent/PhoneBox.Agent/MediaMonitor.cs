@@ -10,8 +10,12 @@ public sealed class MediaMonitor(ILogger<MediaMonitor> log, ConfigStore? config 
     // events go missing; for SettleMs after a new track it reads each second while its thumbnail settles.
     internal static readonly TimeSpan FallbackPoll = TimeSpan.FromSeconds(10);
     private const long SettleMs = 8000;
-    // a timeline event that moves the position by more than this against the count is a seek
+    // a timeline that moves the position by more than this against the count is a seek
     private const long SeekMs = 1500;
+    // Readings that events ask for are at least this far apart (no more often than the old once-a-second poll), and
+    // wait this long for the rest of a burst (a new track raises several events).
+    private const long MinGapMs = 1000;
+    private const int CoalesceMs = 250;
 
     private GlobalSystemMediaTransportControlsSessionManager? _mgr;
     private volatile MediaSnapshot? _snap;
@@ -21,6 +25,9 @@ public sealed class MediaMonitor(ILogger<MediaMonitor> log, ConfigStore? config 
     private GlobalSystemMediaTransportControlsSession? _observed;
     private long _revision;
     private long _settleUntil;
+    // set by the event handlers, which never call back into the session: reading it from inside one of its events can
+    // raise that event again on the same stack
+    private int _full, _timeline;
 
     public AlbumArt? Art => _art.Current;
     public MediaSnapshot? Snapshot() => _snap;
@@ -32,11 +39,14 @@ public sealed class MediaMonitor(ILogger<MediaMonitor> log, ConfigStore? config 
     {
         try
         {
+            var due = true;
+            long lastPoll = long.MinValue / 2;
             while (!ct.IsCancellationRequested)
             {
                 if (!Enabled)
                 {
                     Detach();
+                    due = true;
                     await Task.Delay(2000, ct);
                     continue;
                 }
@@ -47,8 +57,13 @@ public sealed class MediaMonitor(ILogger<MediaMonitor> log, ConfigStore? config 
                         _mgr = await GlobalSystemMediaTransportControlsSessionManager.RequestAsync();
                         _mgr.CurrentSessionChanged += SessionChanged;
                         Settle();
+                        due = true;
                     }
-                    await Poll(ct);
+                    if (due || Interlocked.Exchange(ref _full, 0) == 1 || (Volatile.Read(ref _timeline) == 1 && Seeked()))
+                    {
+                        lastPoll = Environment.TickCount64;
+                        await Poll(ct);
+                    }
                 }
                 catch (OperationCanceledException) when (ct.IsCancellationRequested) { break; }
                 catch (Exception ex)
@@ -56,11 +71,18 @@ public sealed class MediaMonitor(ILogger<MediaMonitor> log, ConfigStore? config 
                     log.LogDebug("media: {Msg}", ex.Message);
                     _snap = null;
                 }
+                // what the reads above raised themselves is not news
+                Interlocked.Exchange(ref _full, 0);
+                Interlocked.Exchange(ref _timeline, 0);
+                _wake.Wait(0);
+
                 var settling = Environment.TickCount64 < Interlocked.Read(ref _settleUntil);
-                try { await _wake.WaitAsync(settling ? TimeSpan.FromSeconds(1) : FallbackPoll, ct); }
-                catch (OperationCanceledException) when (ct.IsCancellationRequested) { break; }
+                due = !await _wake.WaitAsync(settling ? TimeSpan.FromSeconds(1) : FallbackPoll, ct);
+                if (!due)
+                    await Task.Delay((int)Math.Max(CoalesceMs, MinGapMs - (Environment.TickCount64 - lastPoll)), ct);
             }
         }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested) { }
         finally { Detach(); }
     }
 
@@ -81,22 +103,21 @@ public sealed class MediaMonitor(ILogger<MediaMonitor> log, ConfigStore? config 
     private void Settle() => Interlocked.Exchange(ref _settleUntil, Environment.TickCount64 + SettleMs);
 
     private void SessionChanged(GlobalSystemMediaTransportControlsSessionManager sender, CurrentSessionChangedEventArgs args)
-    { Interlocked.Increment(ref _revision); Settle(); Wake(); }
+    { Interlocked.Increment(ref _revision); Settle(); Volatile.Write(ref _full, 1); Wake(); }
     private void PropertiesChanged(GlobalSystemMediaTransportControlsSession sender, MediaPropertiesChangedEventArgs args)
-    { Interlocked.Increment(ref _revision); Settle(); Wake(); }
-    private void PlaybackChanged(GlobalSystemMediaTransportControlsSession sender, PlaybackInfoChangedEventArgs args) => Wake();
-
+    { Interlocked.Increment(ref _revision); Settle(); Volatile.Write(ref _full, 1); Wake(); }
+    private void PlaybackChanged(GlobalSystemMediaTransportControlsSession sender, PlaybackInfoChangedEventArgs args)
+    { Volatile.Write(ref _full, 1); Wake(); }
     // Some players publish their timeline every second or so; only a seek or a new length is worth a full reading.
     private void TimelineChanged(GlobalSystemMediaTransportControlsSession sender, TimelinePropertiesChangedEventArgs args)
+    { Volatile.Write(ref _timeline, 1); Wake(); }
+
+    private bool Seeked()
     {
-        try
-        {
-            if (_snap is not { } snap) { Wake(); return; }
-            var (pos, dur) = Position(sender.GetTimelineProperties(), snap.Playing);
-            var expected = snap.PosMs + (snap.Playing ? snap.AgeMs : 0);
-            if ((long)dur.TotalMilliseconds != snap.DurMs || Math.Abs((long)pos.TotalMilliseconds - expected) > SeekMs) Wake();
-        }
-        catch { Wake(); }
+        if (_snap is not { } snap || _observed is not { } session) return true;
+        var (pos, dur) = Position(session.GetTimelineProperties(), snap.Playing);
+        var expected = snap.PosMs + (snap.Playing ? snap.AgeMs : 0);
+        return (long)dur.TotalMilliseconds != snap.DurMs || Math.Abs((long)pos.TotalMilliseconds - expected) > SeekMs;
     }
 
     private void Observe(GlobalSystemMediaTransportControlsSession? session)
@@ -198,7 +219,6 @@ public sealed class MediaMonitor(ILogger<MediaMonitor> log, ConfigStore? config 
             _ => false,
         };
         try { await Poll(); } catch { }
-        Wake();
         return ok;
     }
 
