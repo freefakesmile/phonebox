@@ -793,6 +793,9 @@ nav a.on::before { color: var(--accent); }
         <div class="row" style="margin-bottom:8px"><label class="switch"><input type="checkbox" data-bind="features.ai"><span></span></label> <span data-i18n="s.features.ai">AI integrations (coding-agent sessions, AI quotas and CodexBar, permission prompts on the phone)</span></div>
         <div class="row" style="margin-bottom:8px"><label class="switch"><input type="checkbox" data-bind="features.processes"><span></span></label> <span data-i18n="s.features.processes">Process list (Processes widget)</span></div>
         <div class="row" style="margin-bottom:8px"><label class="switch"><input type="checkbox" data-bind="features.media"><span></span></label> <span data-i18n="s.features.media">Now playing (Media widgets and media controls)</span></div>
+        <div class="field" style="margin-top:12px"><label for="sensorsSource" data-i18n="s.sensors.source">Hardware sensors</label>
+          <select id="sensorsSource" data-bind="sensors.source"><option value="lhm" data-i18n="s.sensors.lhm">LibreHardwareMonitor (CPU temperature)</option><option value="afterburner" data-i18n="s.sensors.afterburner">MSI Afterburner (CPU temperature, FPS and every sensor it monitors)</option></select>
+          <p class="hint" style="margin:6px 0 0" data-i18n="s.sensors.hint">With Afterburner, each of its sensors is a live pushed value for the Pushed value widget: ab.framerate, ab.frametime, ab.cpu-temperature, ab.gpu-temperature, ab.gpu-usage, ab.power … FPS needs RivaTuner Statistics Server running.</p></div>
       </div>
 
       <div class="card">

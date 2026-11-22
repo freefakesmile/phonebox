@@ -26,7 +26,7 @@ public sealed record PcSnapshot(double? Cpu, double? CpuTemp, string CpuName, do
     IReadOnlyList<GpuInfo>? Gpus = null);
 
 /// <summary>Samples CPU, RAM, network, disk and GPU metrics once a second.</summary>
-public sealed partial class SystemMonitor(ILogger<SystemMonitor> log, ConfigStore? config = null) : BackgroundService
+public sealed partial class SystemMonitor(ILogger<SystemMonitor> log, ConfigStore? config = null, AfterburnerMonitor? afterburner = null) : BackgroundService
 {
     // LibreHardwareMonitor's web server often takes 600 ms or more to answer on a busy machine (#442)
     private readonly HttpClient _http = new() { Timeout = TimeSpan.FromSeconds(2) };
@@ -253,6 +253,14 @@ public sealed partial class SystemMonitor(ILogger<SystemMonitor> log, ConfigStor
         while (!ct.IsCancellationRequested)
         {
             var delay = TimeSpan.FromSeconds(2);
+            if (config?.Get().Sensors.Source == SensorsConfig.Afterburner)
+            {
+                // LibreHardwareMonitor is left alone: the temperature comes from Afterburner (null while it isn't running)
+                _cpuTemp = afterburner?.CpuTemp;
+                _lhmGpus = null;
+                await Task.Delay(delay, ct);
+                continue;
+            }
             try
             {
                 using var doc = JsonDocument.Parse(await _http.GetStringAsync("http://127.0.0.1:8085/data.json", ct));

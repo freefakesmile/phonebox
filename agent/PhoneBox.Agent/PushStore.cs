@@ -24,6 +24,8 @@ public sealed partial class PushStore : IDisposable
 
     private readonly string _dataPath;
     private readonly ConcurrentDictionary<string, PushItem> _items = new();
+    // values the agent itself keeps current (Afterburner's sensors): listed like pushed ones, never saved to disk
+    private readonly ConcurrentDictionary<string, PushItem> _live = new();
     private readonly Lock _setLock = new();
     private readonly Lock _evLock = new();
     private readonly LinkedList<PanelEvent> _events = new();
@@ -76,8 +78,27 @@ public sealed partial class PushStore : IDisposable
     public IReadOnlyDictionary<string, PushItem> Snapshot()
     {
         PurgeExpired();
+        var all = Stored();
+        foreach (var (k, v) in _live) all.TryAdd(k, v); // a value pushed under the same key wins
+        return all;
+    }
+
+    private Dictionary<string, PushItem> Stored()
+    {
         var now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
         return _items.Where(kv => kv.Value.ExpiresAt is null || kv.Value.ExpiresAt > now).ToDictionary(kv => kv.Key, kv => kv.Value);
+    }
+
+    /// <summary>Sets a live value: shown like a pushed one, never written to disk, gone when the agent stops.</summary>
+    public void SetLive(string key, JsonElement data)
+    {
+        _live[key] = new PushItem(data.Clone(), DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(), null);
+        Bump();
+    }
+
+    public void RemoveLive(string key)
+    {
+        if (_live.TryRemove(key, out _)) Bump();
     }
 
     public PushItem? Get(string key) => Snapshot().GetValueOrDefault(key);
@@ -155,15 +176,21 @@ public sealed partial class PushStore : IDisposable
 
     private void Changed()
     {
+        Bump();
+        if (Interlocked.Exchange(ref _savePending, 1) != 0) return;
+        lock (_persistLock)
+            if (!_disposed) _saveTimer.Change(SaveDelayMs, Timeout.Infinite);
+    }
+
+    /// <summary>A new version, so the phones fetch /api/push again.</summary>
+    private void Bump()
+    {
         var now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
         long previous;
         do
         {
             previous = Interlocked.Read(ref _version);
         } while (Interlocked.CompareExchange(ref _version, Math.Max(now, previous + 1), previous) != previous);
-        if (Interlocked.Exchange(ref _savePending, 1) != 0) return;
-        lock (_persistLock)
-            if (!_disposed) _saveTimer.Change(SaveDelayMs, Timeout.Infinite);
     }
 
     private void Persist()
@@ -191,7 +218,7 @@ public sealed partial class PushStore : IDisposable
         {
             Directory.CreateDirectory(Path.GetDirectoryName(_dataPath)!);
             var tmp = _dataPath + ".tmp";
-            AppPaths.WriteAllTextPrivate(tmp, JsonSerializer.Serialize(Snapshot()));
+            AppPaths.WriteAllTextPrivate(tmp, JsonSerializer.Serialize(Stored()));
             File.Move(tmp, _dataPath, overwrite: true);
             _saveRetryMs = SaveDelayMs;
         }

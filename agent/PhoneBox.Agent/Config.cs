@@ -28,6 +28,7 @@ public sealed class AgentConfig
     public OpenCodeConfig OpenCode { get; set; } = new();
     /// <summary>Whole features that can be switched off when they are not used, so the agent does no work for them.</summary>
     public FeaturesConfig Features { get; set; } = new();
+    public SensorsConfig Sensors { get; set; } = new();
     public List<PageConfig> Pages { get; set; } = [];
     public List<Shortcut> Shortcuts { get; set; } = [];
     public List<RuleConfig> Rules { get; set; } = [];
@@ -264,6 +265,14 @@ public sealed class ClaudeConfig
     /// <summary>Show each Claude Code chat's title on the phone. The title is the name you gave the chat or the one
     /// Claude Code wrote, which it often draws from your first prompt, so it stays off until you turn it on.</summary>
     public bool ShareSessionTitles { get; set; }
+}
+
+public sealed class SensorsConfig
+{
+    public const string Lhm = "lhm", Afterburner = "afterburner";
+    /// <summary>Where the CPU temperature comes from: LibreHardwareMonitor's web server (lhm), or MSI Afterburner's shared
+    /// memory (afterburner), which also turns every Afterburner sensor (FPS, frametime …) into a live "ab.*" pushed value.</summary>
+    public string Source { get; set; } = Lhm;
 }
 
 public sealed class FeaturesConfig
@@ -690,6 +699,8 @@ public sealed partial class ConfigStore(string path)
         c.Cursor ??= new();
         c.Antigravity ??= new();
         c.Features ??= new();
+        c.Sensors ??= new();
+        c.Sensors.Source = c.Sensors.Source?.Trim().ToLowerInvariant() is SensorsConfig.Afterburner ? SensorsConfig.Afterburner : SensorsConfig.Lhm;
         c.OpenCode ??= new();
         c.OpenCode.TimeoutSec = Math.Clamp(c.OpenCode.TimeoutSec, 10, 3600);
         c.OpenCode.AlwaysCountdownSec = Math.Clamp(c.OpenCode.AlwaysCountdownSec, 0, 60);
