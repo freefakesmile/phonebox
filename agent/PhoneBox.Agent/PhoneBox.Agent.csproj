@@ -15,7 +15,17 @@
     <Description>PhoneBox desktop agent: feeds the PhoneBox Android desk panel over USB or Wi-Fi.</Description>
     <Version>0.9.29</Version>
     <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
+    <!-- A background agent, not a server: the web SDK's server GC keeps a heap and a GC thread per core (16 on a
+         16-thread CPU). Workstation, non-concurrent GC measured ~15 MB less private memory and 9 fewer threads. -->
+    <ServerGarbageCollection>false</ServerGarbageCollection>
+    <ConcurrentGarbageCollection>false</ConcurrentGarbageCollection>
   </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Idle thread-pool workers spin before they sleep; with only small periodic work items that spinning was a
+         measurable share of the agent's CPU (together with the GC settings above: ~4.5% -> ~3.6% of a core). -->
+    <RuntimeHostConfigurationOption Include="System.Threading.ThreadPool.UnfairSemaphoreSpinLimit" Value="0" />
+  </ItemGroup>
 
   <PropertyGroup Condition="$(TargetFramework.Contains('-windows'))">
     <!-- no console window; lives in the system tray -->
