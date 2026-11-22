@@ -100,7 +100,7 @@ public sealed class OpenCodeApprovals : BackgroundService
 
     private (bool Enabled, bool OnlyWhenAway, int TimeoutSec, bool WatchWsl, int CountdownSec) Settings =>
         _config?.Get().OpenCode is { } c
-            ? (c.PhoneApprovals, c.OnlyWhenAway, c.TimeoutSec, c.WatchWsl, c.AlwaysCountdownSec)
+            ? (c.PhoneApprovals && _config.Get().Features.Ai, c.OnlyWhenAway, c.TimeoutSec, c.WatchWsl, c.AlwaysCountdownSec)
             : (false, false, 90, false, 10);
 
     protected override async Task ExecuteAsync(CancellationToken ct)

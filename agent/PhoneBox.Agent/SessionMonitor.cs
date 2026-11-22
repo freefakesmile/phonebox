@@ -73,6 +73,14 @@ public sealed partial class SessionMonitor(ILogger<SessionMonitor> log, ConfigSt
     {
         while (!ct.IsCancellationRequested)
         {
+            // Settings › General › AI integrations off: no session files or services are read at all.
+            if (config?.Get().Features.Ai == false)
+            {
+                _sessions = [];
+                ClearAntigravityCache();
+                await Task.Delay(2000, ct);
+                continue;
+            }
             var list = new List<AgentSession>();
             try { list.AddRange(ReadClaude(titles: ShareTitles)); } catch (Exception ex) { log.LogDebug("claude sessions: {Msg}", ex.Message); }
             try { list.AddRange(ReadCodex()); } catch (Exception ex) { log.LogDebug("codex sessions: {Msg}", ex.Message); }

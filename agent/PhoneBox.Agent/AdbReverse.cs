@@ -354,6 +354,8 @@ public sealed class AdbReverse(ConfigStore cfg, ILogger<AdbReverse> log, AgentEn
     internal static async Task<string> Adb(string adb, string args, CancellationToken ct, bool anyExit = false)
     {
         if (SessionEnding) throw new OperationCanceledException("the session is ending");
+        // The frequent calls go straight to the running adb server; adb.exe only when that is not possible.
+        if (await AdbServer.TryRunAsync(args, anyExit, TimeSpan.FromSeconds(8), ct) is { } fast) return fast;
         var psi = new ProcessStartInfo(adb, args)
         {
             RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false, CreateNoWindow = true,

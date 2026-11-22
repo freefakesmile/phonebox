@@ -1,0 +1,38 @@
+name: personal windows agent
+
+# Personal fork: only the Windows agent, its unit tests and a self-contained single-file build.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: personal-windows-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  agent:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73 # v6.1.0
+        with:
+          dotnet-version: 10.0.x
+      - name: Unit tests
+        run: dotnet test agent/PhoneBox.Agent.Tests --nologo
+      - name: Publish agent (self-contained, single file)
+        run: dotnet publish agent/PhoneBox.Agent -c Release -f net10.0-windows10.0.19041.0 -r win-x64 --self-contained true -p:PublishSingleFile=true -o out --nologo
+      - name: Smoke test
+        shell: pwsh
+        run: |
+          $version = ([regex]'<Version>([^<]+)</Version>').Match((Get-Content -Raw agent/PhoneBox.Agent/PhoneBox.Agent.csproj)).Groups[1].Value
+          python tools/smoke-agent.py out/PhoneBoxAgent.exe --version $version
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: phonebox-agent-win-x64-${{ github.sha }}
+          path: out/
+          retention-days: 30

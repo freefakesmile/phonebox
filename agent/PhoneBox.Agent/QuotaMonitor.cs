@@ -180,6 +180,7 @@ public sealed partial class QuotaMonitor(ConfigStore config, ILogger<QuotaMonito
 
     public IReadOnlyList<QuotaProvider> Snapshot()
     {
+        if (!AiEnabled()) return []; // no stale quotas on the panel while AI integrations are off
         var now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
         var external = _external;
         var core = new[] { "claude", "codex", "antigravity" }
@@ -207,7 +208,10 @@ public sealed partial class QuotaMonitor(ConfigStore config, ILogger<QuotaMonito
     }
 
     /// <summary>Returns true when an enabled page shows a quota widget with cost overview enabled.</summary>
-    internal bool IsOverviewEnabled() => config?.Get().ShowQuotaOverview() == true;
+    /// <summary>Settings › General › AI integrations; true without a config (tests).</summary>
+    internal bool AiEnabled() => config?.Get().Features.Ai != false;
+
+    internal bool IsOverviewEnabled() => AiEnabled() && config?.Get().ShowQuotaOverview() == true;
 
     /// <summary>Returns the current cost overview when enabled and still within the 1-hour freshness window.</summary>
     public QuotaOverview? Overview() => Overview(DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
@@ -216,7 +220,7 @@ public sealed partial class QuotaMonitor(ConfigStore config, ILogger<QuotaMonito
     internal QuotaOverview? Overview(long now) => CodexBar.SelectOverview(_overview, IsOverviewEnabled(), now);
 
     /// <summary>Returns true when live Codex CLI polling is opted in and an enabled page shows Codex quotas.</summary>
-    internal bool IsCodexLiveEnabled() => config is null || (config.Get() is { } c && c.CodexBar.CodexLiveQuota && c.ShowCodexQuota());
+    internal bool IsCodexLiveEnabled() => config is null || (config.Get() is { } c && c.Features.Ai && c.CodexBar.CodexLiveQuota && c.ShowCodexQuota());
 
     internal const long CodexLiveIntervalMs = 180_000;
     internal const long CodexLiveStaleMs = 360_000;
@@ -360,6 +364,14 @@ public sealed partial class QuotaMonitor(ConfigStore config, ILogger<QuotaMonito
         var wakes = Wake.Count;
         while (!ct.IsCancellationRequested)
         {
+            if (!AiEnabled())
+            {
+                // Nothing is polled (CodexBar, Codex, Antigravity, the Claude API); turned back on, all refresh at once.
+                _nextCodexBar = _nextAntigravity = 0;
+                wakes = Wake.Count;
+                await Wake.Delay(TimeSpan.FromSeconds(5), ct);
+                continue;
+            }
             // Capture before the poll so a /api/refresh during CodexBar/Claude work still ends the wait below.
             var wake = Wake.Pending;
             // /api/refresh (Wake.Now) must re-poll CodexBar; otherwise Cursor stays on a stale "No session" for up to 3 minutes.

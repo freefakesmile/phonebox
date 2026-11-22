@@ -23,8 +23,11 @@ public sealed record KillResult(int Killed, int Failed, string? Error);
 /// Groups processes by name and measures their CPU (%) and memory use. Sampling only runs
 /// while the phone is actually asking for the list, to avoid needless load.
 /// </summary>
-public sealed class ProcessMonitor(ILogger<ProcessMonitor> log, SessionMonitor sessions) : BackgroundService
+public sealed class ProcessMonitor(ILogger<ProcessMonitor> log, SessionMonitor sessions, ConfigStore? config = null) : BackgroundService
 {
+    /// <summary>Settings › General › Process list; on without a config (tests).</summary>
+    private bool Enabled => config?.Get().Features.Processes != false;
+
     // Processes Windows needs, or whose termination would break the user session.
 #if !WINDOWS
     private static readonly HashSet<string> Protected = UnixProc.Protected;
@@ -65,7 +68,8 @@ public sealed class ProcessMonitor(ILogger<ProcessMonitor> log, SessionMonitor s
     {
         while (!ct.IsCancellationRequested)
         {
-            if (Environment.TickCount64 - Interlocked.Read(ref _lastRequest) < 15_000)
+            // Off in the settings: never enumerate processes, whatever the panel asks for (it gets an empty list).
+            if (Enabled && Environment.TickCount64 - Interlocked.Read(ref _lastRequest) < 15_000)
             {
                 try
                 {

@@ -25,7 +25,7 @@ public static class ClaudeHook
     {
         if (input.ValueKind != JsonValueKind.Object) return null;
         var c = cfg.Get().Claude;
-        if (!c.PhoneApprovals) return null;
+        if (!c.PhoneApprovals || !cfg.Get().Features.Ai) return null;
         if (c.OnlyWhenAway && Idle.Seconds() < 60) return null;
 
         var tool = Str(input, "tool_name") ?? "a tool";

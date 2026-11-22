@@ -26,6 +26,8 @@ public sealed class AgentConfig
     /// <summary>OpenCode prompts and sessions on the phone; everything is off until the settings page turns it on.</summary>
     [JsonPropertyName("opencode")]
     public OpenCodeConfig OpenCode { get; set; } = new();
+    /// <summary>Whole features that can be switched off when they are not used, so the agent does no work for them.</summary>
+    public FeaturesConfig Features { get; set; } = new();
     public List<PageConfig> Pages { get; set; } = [];
     public List<Shortcut> Shortcuts { get; set; } = [];
     public List<RuleConfig> Rules { get; set; } = [];
@@ -262,6 +264,15 @@ public sealed class ClaudeConfig
     /// <summary>Show each Claude Code chat's title on the phone. The title is the name you gave the chat or the one
     /// Claude Code wrote, which it often draws from your first prompt, so it stays off until you turn it on.</summary>
     public bool ShareSessionTitles { get; set; }
+}
+
+public sealed class FeaturesConfig
+{
+    /// <summary>AI integrations: coding-agent sessions (Claude Code, Codex, OpenCode, Cursor, Antigravity), AI quotas and
+    /// CodexBar, and permission prompts on the phone. Off, the agent reads none of their files, services or APIs.</summary>
+    public bool Ai { get; set; } = true;
+    /// <summary>The process list (Processes widget, top processes): off, the agent never enumerates processes.</summary>
+    public bool Processes { get; set; } = true;
 }
 
 public sealed class CursorConfig
@@ -676,6 +687,7 @@ public sealed partial class ConfigStore(string path)
         c.Claude.TimeoutSec = Math.Clamp(c.Claude.TimeoutSec, 10, 3600);
         c.Cursor ??= new();
         c.Antigravity ??= new();
+        c.Features ??= new();
         c.OpenCode ??= new();
         c.OpenCode.TimeoutSec = Math.Clamp(c.OpenCode.TimeoutSec, 10, 3600);
         c.OpenCode.AlwaysCountdownSec = Math.Clamp(c.OpenCode.AlwaysCountdownSec, 0, 60);
