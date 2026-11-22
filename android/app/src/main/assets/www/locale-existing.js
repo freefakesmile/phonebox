@@ -10125,6 +10125,8 @@ window.PhoneBoxLocaleData = Object.assign(window.PhoneBoxLocaleData || {}, {
       "s.pageKeys.next": "Следующая страница",
       "s.pageKeys.hint": "Работают в любой программе. Телефон получает нажатие кнопки громкости, и панель перелистывает страницу (опция «Кнопки громкости переключают страницы» должна быть включена). Сочетания вида Ctrl+Alt+Left, Ctrl+Shift+F9, Win+Alt+PageDown.",
       "s.sensors.source": "Датчики железа",
+      "s.sensors.poll": "Интервал чтения Afterburner (мс, 100–2000)",
+      "s.sensors.pollHint": "На телефон значения всё равно уходят раз в секунду; более короткий интервал нужен только для ab.frametime-max (самый долгий кадр за секунду), чтобы ловить более короткие подлаги. В Afterburner поставьте такой же «Период опроса» (Настройки › Мониторинг).",
       "s.sensors.lhm": "LibreHardwareMonitor (температура CPU)",
       "s.sensors.afterburner": "MSI Afterburner (температура CPU, FPS и все датчики, которые он мониторит)",
       "s.sensors.hint": "С Afterburner каждый его датчик доступен виджету «Пуш-значение» по ключу: ab.framerate, ab.frametime, ab.cpu-temperature, ab.gpu-temperature, ab.gpu-usage, ab.power … Для FPS должен быть запущен RivaTuner Statistics Server.",

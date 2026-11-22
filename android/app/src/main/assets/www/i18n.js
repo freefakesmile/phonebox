@@ -527,6 +527,8 @@
       's.pageKeys.next': 'Next page',
       's.pageKeys.hint': 'Work in every program. The phone gets a volume key press, which the panel turns into a page flip (“The phone’s volume keys switch pages” must stay on). Combinations like Ctrl+Alt+Left, Ctrl+Shift+F9, Win+Alt+PageDown.',
       's.sensors.source': 'Hardware sensors',
+      's.sensors.poll': 'Afterburner read interval (ms, 100–2000)',
+      's.sensors.pollHint': "Values still reach the phone once a second; a shorter interval only lets ab.frametime-max (the slowest frame of each second) catch shorter hitches. Set Afterburner's Hardware polling period (Settings › Monitoring) to the same value.",
       's.sensors.lhm': 'LibreHardwareMonitor (CPU temperature)',
       's.sensors.afterburner': 'MSI Afterburner (CPU temperature, FPS and every sensor it monitors)',
       's.sensors.hint': 'With Afterburner, each of its sensors is a live pushed value for the Pushed value widget: ab.framerate, ab.frametime, ab.cpu-temperature, ab.gpu-temperature, ab.gpu-usage, ab.power … FPS needs RivaTuner Statistics Server running.',

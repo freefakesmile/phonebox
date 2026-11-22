@@ -28,6 +28,8 @@ public sealed class AfterburnerMonitor(PushStore push, ILogger<AfterburnerMonito
     private readonly Dictionary<string, double> _sent = [];
 
     internal bool Selected => config?.Get().Sensors.Source == SensorsConfig.Afterburner;
+    private int PollMs => config?.Get().Sensors.AfterburnerPollMs ?? SensorsConfig.DefaultPollMs;
+    internal const string FrametimeMaxName = "Frametime max"; // published as ab.frametime-max
 
     /// <summary>Afterburner's "CPU temperature", or null when it is not selected, not running or not monitoring it.</summary>
     public double? CpuTemp
@@ -43,12 +45,17 @@ public sealed class AfterburnerMonitor(PushStore push, ILogger<AfterburnerMonito
 
     protected override async Task ExecuteAsync(CancellationToken ct)
     {
+        // Read every PollMs, publish once a second: the phone's load stays the same whatever the interval, and the
+        // slowest frame seen in between becomes ab.frametime-max.
+        long nextPublish = 0;
+        float frametimeMax = 0;
         try
         {
             while (!ct.IsCancellationRequested)
             {
-                var delay = 1000;
-                if (!Selected) { Clear(); delay = 2000; }
+                var poll = PollMs;
+                var delay = poll;
+                if (!Selected) { Clear(); frametimeMax = 0; delay = 2000; }
                 else
                 {
                     try
@@ -56,10 +63,17 @@ public sealed class AfterburnerMonitor(PushStore push, ILogger<AfterburnerMonito
                         if (ReadShared() is { } readings)
                         {
                             _last = readings;
-                            Interlocked.Exchange(ref _lastAt, Environment.TickCount64);
-                            Publish(readings);
+                            var now = Environment.TickCount64;
+                            Interlocked.Exchange(ref _lastAt, now);
+                            frametimeMax = Math.Max(frametimeMax, Frametime(readings));
+                            if (now >= nextPublish)
+                            {
+                                Publish(WithFrametimeMax(readings, frametimeMax));
+                                frametimeMax = 0;
+                                nextPublish = now + 1000 - poll / 2;
+                            }
                         }
-                        else { Clear(); delay = 10_000; } // not running: look again now and then
+                        else { Clear(); frametimeMax = 0; delay = 10_000; } // not running: look again now and then
                     }
                     catch (Exception ex)
                     {
@@ -74,6 +88,17 @@ public sealed class AfterburnerMonitor(PushStore push, ILogger<AfterburnerMonito
         catch (OperationCanceledException) when (ct.IsCancellationRequested) { }
         finally { Clear(); }
     }
+
+    /// <summary>Afterburner's current frametime (ms), 0 without a game.</summary>
+    internal static float Frametime(IReadOnlyList<Reading> readings)
+    {
+        foreach (var r in readings)
+            if (r.Name.Equals("Frametime", StringComparison.OrdinalIgnoreCase) && Valid(r.Value) && r.Value > 0) return r.Value;
+        return 0;
+    }
+
+    internal static IReadOnlyList<Reading> WithFrametimeMax(IReadOnlyList<Reading> readings, float max) =>
+        max > 0 ? [.. readings, new Reading(FrametimeMaxName, "ms", max, NoGpu)] : readings;
 
     private void Publish(IReadOnlyList<Reading> readings)
     {

@@ -114,6 +114,37 @@ public sealed class AfterburnerTests : IDisposable
     }
 
     [Fact]
+    public void The_slowest_frame_of_the_second_is_its_own_value()
+    {
+        AfterburnerMonitor.Reading R(string n, float v) => new(n, "ms", v, AfterburnerMonitor.NoGpu);
+        IReadOnlyList<AfterburnerMonitor.Reading> game = [R("Framerate", 144), R("Frametime", 6.9f)];
+        Assert.Equal(6.9f, AfterburnerMonitor.Frametime(game));
+        Assert.Equal(0f, AfterburnerMonitor.Frametime([R("Frametime", 0)]));          // no game
+        Assert.Equal(0f, AfterburnerMonitor.Frametime([R("Frametime", float.MaxValue)]));
+
+        var withMax = AfterburnerMonitor.WithFrametimeMax(game, 41.5f);
+        Assert.Equal("ab.frametime-max", AfterburnerMonitor.Key(withMax[^1]));
+        Assert.Equal(41.5f, withMax[^1].Value);
+        Assert.Same(game, AfterburnerMonitor.WithFrametimeMax(game, 0)); // nothing measured: no value
+    }
+
+    [Fact]
+    public void The_read_interval_is_kept_within_bounds()
+    {
+        SensorsConfig Read(string json)
+        {
+            var p = Path.Combine(_dir, $"p-{Guid.NewGuid():N}.json");
+            File.WriteAllText(p, json);
+            return new ConfigStore(p).Get().Sensors;
+        }
+        Assert.Equal(1000, Read("{}").AfterburnerPollMs);
+        Assert.Equal(250, Read("{\"sensors\":{\"afterburnerPollMs\":250}}").AfterburnerPollMs);
+        Assert.Equal(100, Read("{\"sensors\":{\"afterburnerPollMs\":10}}").AfterburnerPollMs);
+        Assert.Equal(2000, Read("{\"sensors\":{\"afterburnerPollMs\":60000}}").AfterburnerPollMs);
+        Assert.Equal(1000, Read("{\"sensors\":{\"afterburnerPollMs\":0}}").AfterburnerPollMs);
+    }
+
+    [Fact]
     public async Task Not_selected_it_reads_nothing()
     {
         var p = Path.Combine(_dir, "lhm.json");

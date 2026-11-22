@@ -283,6 +283,11 @@ public sealed class SensorsConfig
     /// <summary>Where the CPU temperature comes from: LibreHardwareMonitor's web server (lhm), or MSI Afterburner's shared
     /// memory (afterburner), which also turns every Afterburner sensor (FPS, frametime …) into a live "ab.*" pushed value.</summary>
     public string Source { get; set; } = Lhm;
+    /// <summary>How often Afterburner's shared memory is read (100–2000 ms). Values still reach the phone once a second;
+    /// reading faster only makes "ab.frametime-max" (the slowest frame of that second) catch shorter hitches. Afterburner
+    /// itself refreshes at its own "Hardware polling period", which should be set as low.</summary>
+    public int AfterburnerPollMs { get; set; } = DefaultPollMs;
+    public const int DefaultPollMs = 1000, MinPollMs = 100, MaxPollMs = 2000;
 }
 
 public sealed class FeaturesConfig
@@ -714,6 +719,8 @@ public sealed partial class ConfigStore(string path)
         c.PageKeys.Prev = string.IsNullOrWhiteSpace(c.PageKeys.Prev) ? PageKeysConfig.DefaultPrev : c.PageKeys.Prev.Trim();
         c.PageKeys.Next = string.IsNullOrWhiteSpace(c.PageKeys.Next) ? PageKeysConfig.DefaultNext : c.PageKeys.Next.Trim();
         c.Sensors.Source = c.Sensors.Source?.Trim().ToLowerInvariant() is SensorsConfig.Afterburner ? SensorsConfig.Afterburner : SensorsConfig.Lhm;
+        c.Sensors.AfterburnerPollMs = c.Sensors.AfterburnerPollMs <= 0 ? SensorsConfig.DefaultPollMs
+            : Math.Clamp(c.Sensors.AfterburnerPollMs, SensorsConfig.MinPollMs, SensorsConfig.MaxPollMs);
         c.OpenCode ??= new();
         c.OpenCode.TimeoutSec = Math.Clamp(c.OpenCode.TimeoutSec, 10, 3600);
         c.OpenCode.AlwaysCountdownSec = Math.Clamp(c.OpenCode.AlwaysCountdownSec, 0, 60);
