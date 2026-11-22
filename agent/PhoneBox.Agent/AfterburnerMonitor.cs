@@ -45,17 +45,17 @@ public sealed class AfterburnerMonitor(PushStore push, ILogger<AfterburnerMonito
 
     protected override async Task ExecuteAsync(CancellationToken ct)
     {
-        // Read every PollMs, publish once a second: the phone's load stays the same whatever the interval, and the
-        // slowest frame seen in between becomes ab.frametime-max.
-        long nextPublish = 0;
-        float frametimeMax = 0;
+        // Every reading is published: with an interval under a second the stream is poked, so the phone gets it right
+        // away instead of at its next whole second, and the panel's charts move at the same rate. ab.frametime-max is
+        // the slowest frame seen in the last second, so its meaning doesn't depend on the interval.
+        var recent = new Queue<(long At, float Ms)>();
         try
         {
             while (!ct.IsCancellationRequested)
             {
                 var poll = PollMs;
                 var delay = poll;
-                if (!Selected) { Clear(); frametimeMax = 0; delay = 2000; }
+                if (!Selected) { Clear(); recent.Clear(); delay = 2000; }
                 else
                 {
                     try
@@ -65,20 +65,18 @@ public sealed class AfterburnerMonitor(PushStore push, ILogger<AfterburnerMonito
                             _last = readings;
                             var now = Environment.TickCount64;
                             Interlocked.Exchange(ref _lastAt, now);
-                            frametimeMax = Math.Max(frametimeMax, Frametime(readings));
-                            if (now >= nextPublish)
-                            {
-                                Publish(WithFrametimeMax(readings, frametimeMax));
-                                frametimeMax = 0;
-                                nextPublish = now + 1000 - poll / 2;
-                            }
+                            if (Frametime(readings) is var ft and > 0) recent.Enqueue((now, ft));
+                            while (recent.Count > 0 && now - recent.Peek().At > 1000) recent.Dequeue();
+                            var changed = Publish(WithFrametimeMax(readings, recent.Count > 0 ? recent.Max(x => x.Ms) : 0));
+                            if (changed && poll < 1000) StateSignal.Poke();
                         }
-                        else { Clear(); frametimeMax = 0; delay = 10_000; } // not running: look again now and then
+                        else { Clear(); recent.Clear(); delay = 10_000; } // not running: look again now and then
                     }
                     catch (Exception ex)
                     {
                         log.LogDebug("afterburner: {Msg}", ex.Message);
                         Clear();
+                        recent.Clear();
                         delay = 10_000;
                     }
                 }
@@ -100,8 +98,10 @@ public sealed class AfterburnerMonitor(PushStore push, ILogger<AfterburnerMonito
     internal static IReadOnlyList<Reading> WithFrametimeMax(IReadOnlyList<Reading> readings, float max) =>
         max > 0 ? [.. readings, new Reading(FrametimeMaxName, "ms", max, NoGpu)] : readings;
 
-    private void Publish(IReadOnlyList<Reading> readings)
+    /// <returns>Whether a value changed (the phone has something new to fetch).</returns>
+    private bool Publish(IReadOnlyList<Reading> readings)
     {
+        var changed = false;
         var current = new HashSet<string>();
         foreach (var r in readings)
         {
@@ -111,12 +111,15 @@ public sealed class AfterburnerMonitor(PushStore push, ILogger<AfterburnerMonito
             if (_sent.TryGetValue(key, out var old) && old == v) continue; // unchanged: the phone needn't refetch
             _sent[key] = v;
             push.SetLive(key, JsonSerializer.SerializeToElement(v));
+            changed = true;
         }
         foreach (var key in _sent.Keys.Where(k => !current.Contains(k)).ToList())
         {
             _sent.Remove(key);
             push.RemoveLive(key);
+            changed = true;
         }
+        return changed;
     }
 
     private void Clear()
