@@ -7,6 +7,10 @@
   delay and sensitivity. When push to talk is on but Discord has no key set (so nobody hears you), the widget says so.
   It follows the widget's **Control** option like the other buttons and uses the voice scope PhoneBox already asks
   for (#356, [AlberBM](https://github.com/AlberBM)).
+- Synced lyrics: a widget next to Now playing shows the words of the song playing on the computer, the line being
+  sung lit as it plays. The lookup is off by default per widget; with it on, the agent asks LRCLIB (free, no account)
+  with the track's title, artist, album and length, once per song, and keeps the answers in memory only (#339, #378,
+  [1Cellu](https://github.com/1Cellu)).
 
 **Agent**
 - Phone app updates: a phone that cannot take a streamed install (`splice failed: EINVAL`, seen with Android 15 on a
