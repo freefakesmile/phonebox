@@ -29,6 +29,7 @@ public sealed class AgentConfig
     /// <summary>Whole features that can be switched off when they are not used, so the agent does no work for them.</summary>
     public FeaturesConfig Features { get; set; } = new();
     public SensorsConfig Sensors { get; set; } = new();
+    public PageKeysConfig PageKeys { get; set; } = new();
     public List<PageConfig> Pages { get; set; } = [];
     public List<Shortcut> Shortcuts { get; set; } = [];
     public List<RuleConfig> Rules { get; set; } = [];
@@ -265,6 +266,15 @@ public sealed class ClaudeConfig
     /// <summary>Show each Claude Code chat's title on the phone. The title is the name you gave the chat or the one
     /// Claude Code wrote, which it often draws from your first prompt, so it stays off until you turn it on.</summary>
     public bool ShareSessionTitles { get; set; }
+}
+
+/// <summary>Global shortcuts that flip the phone's pages over USB (Windows; see PageHotkeys).</summary>
+public sealed class PageKeysConfig
+{
+    public const string DefaultPrev = "Ctrl+Alt+Left", DefaultNext = "Ctrl+Alt+Right";
+    public bool Enabled { get; set; }
+    public string Prev { get; set; } = DefaultPrev;
+    public string Next { get; set; } = DefaultNext;
 }
 
 public sealed class SensorsConfig
@@ -700,6 +710,9 @@ public sealed partial class ConfigStore(string path)
         c.Antigravity ??= new();
         c.Features ??= new();
         c.Sensors ??= new();
+        c.PageKeys ??= new();
+        c.PageKeys.Prev = string.IsNullOrWhiteSpace(c.PageKeys.Prev) ? PageKeysConfig.DefaultPrev : c.PageKeys.Prev.Trim();
+        c.PageKeys.Next = string.IsNullOrWhiteSpace(c.PageKeys.Next) ? PageKeysConfig.DefaultNext : c.PageKeys.Next.Trim();
         c.Sensors.Source = c.Sensors.Source?.Trim().ToLowerInvariant() is SensorsConfig.Afterburner ? SensorsConfig.Afterburner : SensorsConfig.Lhm;
         c.OpenCode ??= new();
         c.OpenCode.TimeoutSec = Math.Clamp(c.OpenCode.TimeoutSec, 10, 3600);

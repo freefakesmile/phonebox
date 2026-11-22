@@ -75,6 +75,26 @@ public sealed class AdbReverse(ConfigStore cfg, ILogger<AdbReverse> log, AgentEn
         }
     }
 
+    private readonly SemaphoreSlim _keyGate = new(1, 1);
+
+    /// <summary>
+    /// Presses the phone's volume down (next page) or up (previous page) key; the panel flips its page and keeps the
+    /// phone's volume as it is. Presses are sent one at a time, so quick ones arrive in order.
+    /// </summary>
+    public async Task PageKeyAsync(bool next)
+    {
+        if (SessionEnding || _devices.Length == 0 || FindAdb(cfg.Get().AdbPath) is not { } adb) return;
+        await _keyGate.WaitAsync();
+        try
+        {
+            var code = next ? PageHotkeys.KeyVolumeDown : PageHotkeys.KeyVolumeUp;
+            foreach (var d in _devices)
+                await Adb(adb, $"-s {d} shell input keyevent {code}", CancellationToken.None, anyExit: true);
+        }
+        catch (Exception ex) { log.LogDebug("page key: {Msg}", ex.Message); }
+        finally { _keyGate.Release(); }
+    }
+
     public async Task OpenPanelAsync()
     {
         var adb = FindAdb(cfg.Get().AdbPath);

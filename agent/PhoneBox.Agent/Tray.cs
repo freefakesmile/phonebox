@@ -109,6 +109,7 @@ public sealed class Tray : IHostedService
             Visible = true,
         };
         _icon.DoubleClick += (_, _) => OpenUrl(SettingsUrl);
+        using var pageKeys = new PageHotkeyWindow(_config, _adb);
         _adb.StateChanged += () =>
         {
             try { host.BeginInvoke(() => _icon.Text = Tooltip(UiCulture())); } catch { }
