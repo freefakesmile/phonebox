@@ -75,6 +75,100 @@ public sealed class AdbReverse(ConfigStore cfg, ILogger<AdbReverse> log, AgentEn
         }
     }
 
+    /// <summary>
+    /// A regular stop (Quit in the tray, an update, a restart) takes this agent's rule off the phone. Left behind, it
+    /// points at a port nobody listens on any more; the panel keeps connecting there, and the adb server stopped
+    /// answering everyone (the next agent included) until it was restarted.
+    /// </summary>
+    public override async Task StopAsync(CancellationToken cancellationToken)
+    {
+        await base.StopAsync(cancellationToken); // the loop first, so it can't put the rule back
+        await RemoveOwnRulesAsync(cancellationToken);
+    }
+
+    internal async Task RemoveOwnRulesAsync(CancellationToken ct)
+    {
+        if (SessionEnding || _devices.Length == 0 || FindAdb(cfg.Get().AdbPath) is not { } adb) return;
+        using var limit = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        limit.CancelAfter(TimeSpan.FromSeconds(3)); // the agent is closing: never hold that up for long
+        foreach (var d in _devices)
+        {
+            try
+            {
+                // Android 5 and 6 can't list their rules (see Ensure): the one this agent set is remembered instead.
+                // On the others the rule must still be this agent's: a newer agent may have taken the phone over.
+                var ours = _sdk.TryGetValue(d, out var sdk) && sdk is > 0 and <= 23
+                    ? _reverseSet.Contains(d)
+                    : HasOwnRule(await Adb(adb, $"-s {d} reverse --list", limit.Token));
+                if (!ours) continue;
+                await Adb(adb, $"-s {d} reverse --remove {Rule}", limit.Token);
+                _reverseSet.Remove(d);
+                log.LogInformation("{Device}: adb reverse removed (the agent is stopping)", d);
+            }
+            catch (Exception ex) when (ex is IOException or TimeoutException or OperationCanceledException)
+            {
+                log.LogInformation("{Device}: could not remove adb reverse ({Message})", d, ex.Message);
+            }
+        }
+    }
+
+    private readonly AdbWatchdog _watchdog = new();
+
+    /// <summary>
+    /// The adb server took the "devices" call but never answered it for a minute: it is hung (an agent that was killed
+    /// left its rule behind, for one) and nothing gets through until it is restarted. adb's own kill-server asks the
+    /// server itself, which a hung one may never answer, so its process is ended too; the next round's adb.exe starts
+    /// a fresh server, which also drops every reverse rule.
+    /// </summary>
+    private async Task RestartAdbServerAsync(string adb, CancellationToken ct)
+    {
+        if (AdbServer.Port is not { } port) return; // ADB_SERVER_SOCKET: a server somewhere else, not ours to restart
+        var pid = await AdbServerPidAsync(port, ct);
+        log.LogWarning("adb server has not answered for a minute: restarting it{Pid}", pid is null ? "" : $" (process {pid})");
+        try { await ToolProcess.RunAsync(new ProcessStartInfo(adb, "kill-server"), TimeSpan.FromSeconds(3), ct); }
+        catch (Exception ex) when (ex is IOException or TimeoutException or System.ComponentModel.Win32Exception) { }
+        if (pid is not { } id) return;
+        try
+        {
+            using var process = Process.GetProcessById(id);
+            // only adb itself: whatever else may hold the port is left alone
+            if (!process.HasExited && process.ProcessName.Equals("adb", StringComparison.OrdinalIgnoreCase)) process.Kill();
+        }
+        catch (Exception ex) when (ex is ArgumentException or InvalidOperationException or System.ComponentModel.Win32Exception)
+        {
+            log.LogInformation("could not end the adb server ({Message})", ex.Message);
+        }
+    }
+
+    /// <summary>The process listening on the adb server's port, or null when that can't be told.</summary>
+    private static async Task<int?> AdbServerPidAsync(int port, CancellationToken ct)
+    {
+        try
+        {
+            if (OperatingSystem.IsWindows())
+                return ListenerFromNetstat((await ToolProcess.RunAsync(new ProcessStartInfo("netstat", "-ano -p TCP"), TimeSpan.FromSeconds(5), ct)).Output, port);
+            var lsof = await ToolProcess.RunAsync(new ProcessStartInfo("lsof", $"-nP -iTCP:{port} -sTCP:LISTEN -t"), TimeSpan.FromSeconds(5), ct);
+            return int.TryParse(lsof.Output.Split('\n', StringSplitOptions.RemoveEmptyEntries).FirstOrDefault()?.Trim(), out var pid) ? pid : null;
+        }
+        catch (Exception ex) when (ex is IOException or TimeoutException or System.ComponentModel.Win32Exception) { return null; }
+    }
+
+    /// <summary>
+    /// The listener on <paramref name="port"/> in "netstat -ano" output. The state column is translated on a Windows
+    /// in another language (ABHÖREN …), so a listener is told by its remote address instead, which is all zeros.
+    /// </summary>
+    internal static int? ListenerFromNetstat(string output, int port)
+    {
+        foreach (var line in output.Split('\n'))
+        {
+            var p = line.Split((char[])[' ', '\t', '\r'], StringSplitOptions.RemoveEmptyEntries);
+            if (p.Length >= 5 && p[0] == "TCP" && p[1].EndsWith(":" + port, StringComparison.Ordinal)
+                && p[2] is "0.0.0.0:0" or "[::]:0" && int.TryParse(p[^1], out var pid) && pid > 0)
+                return pid;
+        }
+        return null;
+    }
+
     private readonly SemaphoreSlim _keyGate = new(1, 1);
 
     /// <summary>
@@ -140,7 +234,15 @@ public sealed class AdbReverse(ConfigStore cfg, ILogger<AdbReverse> log, AgentEn
         }
 
         var serial = cfg.Get().DeviceSerial;
-        var devices = (await Adb(adb, "devices", ct))
+        string listed;
+        try { listed = await Adb(adb, "devices", ct); }
+        catch (TimeoutException)
+        {
+            if (_watchdog.Silent(Environment.TickCount64)) await RestartAdbServerAsync(adb, ct);
+            throw;
+        }
+        _watchdog.Answered();
+        var devices = listed
             .Split('\n').Skip(1)
             .Select(l => l.Trim().Split('\t'))
             .Where(p => p.Length == 2 && p[1] == "device")
@@ -430,5 +532,27 @@ internal sealed class StateLog(long repeatMs = 60_000)
         if (!repeat || now - _logged < repeatMs) return null;
         _logged = now;
         return $"{state} (still, {_count} times in {(now - _since) / 1000} s)";
+    }
+}
+
+/// <summary>
+/// When the adb server counts as hung: its "devices" call has timed out for <paramref name="silentMs"/> in a row. A
+/// restart is not repeated within <paramref name="cooldownMs"/>, so a server that is slow for some other reason is
+/// not restarted over and over.
+/// </summary>
+internal sealed class AdbWatchdog(long silentMs = 60_000, long cooldownMs = 300_000)
+{
+    private long? _silentSince, _restartedAt;
+
+    public void Answered() => _silentSince = null;
+
+    /// <returns>True when the server should be restarted now.</returns>
+    public bool Silent(long now)
+    {
+        _silentSince ??= now;
+        if (now - _silentSince < silentMs || now - _restartedAt < cooldownMs) return false;
+        _restartedAt = now;
+        _silentSince = null; // a fresh minute before the next one
+        return true;
     }
 }
