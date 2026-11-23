@@ -29,7 +29,7 @@ public sealed class AdbReverse(ConfigStore cfg, ILogger<AdbReverse> log, AgentEn
     // asked again now and then even when known: an app whose data was cleared has a new key and no pin, and can't say so
     internal const long KeyRefreshMs = 120_000;
 
-    private string _lastState = "";
+    private readonly StateLog _stateLog = new();
     private volatile string[] _devices = [];
     private volatile string[] _all = [];
 
@@ -70,7 +70,7 @@ public sealed class AdbReverse(ConfigStore cfg, ILogger<AdbReverse> log, AgentEn
             if (SessionEnding) { await Task.Delay(TimeSpan.FromSeconds(4), ct); continue; }
             try { await Ensure(ct); }
             catch (OperationCanceledException) { return; }
-            catch (Exception ex) { Report($"adb error: {ex.Message}"); }
+            catch (Exception ex) { Report($"adb error: {ex.Message}", repeat: true); }
             await Task.Delay(TimeSpan.FromSeconds(4), ct);
         }
     }
@@ -323,11 +323,11 @@ public sealed class AdbReverse(ConfigStore cfg, ILogger<AdbReverse> log, AgentEn
         if (changed) StateChanged?.Invoke();
     }
 
-    private void Report(string state)
+    private void Report(string state, bool repeat = false)
     {
-        if (state == _lastState) return;
-        _lastState = state;
-        log.LogInformation("{State}", state);
+        if (_stateLog.Next(state, repeat, Environment.TickCount64) is not { } line) return;
+        if (line == state) log.LogInformation("{State}", line);
+        else log.LogWarning("{State}", line);
     }
 
     public static string? FindAdb(string? configured)
@@ -381,8 +381,54 @@ public sealed class AdbReverse(ConfigStore cfg, ILogger<AdbReverse> log, AgentEn
             RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false, CreateNoWindow = true,
             WorkingDirectory = AppPaths.NeutralCwd,
         };
-        var result = await ToolProcess.RunAsync(psi, TimeSpan.FromSeconds(8), ct);
-        if (result.ExitCode != 0 && !anyExit) throw new IOException($"ADB exited with code {result.ExitCode}");
+        ToolProcess.Result result;
+        try { result = await ToolProcess.RunAsync(psi, TimeSpan.FromSeconds(8), ct); }
+        catch (TimeoutException) { throw new TimeoutException($"adb {Describe(args)} did not answer within 8 s"); }
+        if (result.ExitCode != 0 && !anyExit)
+            throw new IOException($"adb {Describe(args)} exited with code {result.ExitCode}{FirstLine(result.Error)}");
         return result.Output;
+    }
+
+    /// <summary>The command line for the log, cut after a few words: enough to tell which call failed, never the
+    /// values further on (the USB pin of "content insert … --bind fp:s:…").</summary>
+    internal static string Describe(string args)
+    {
+        var words = args.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        return words.Length <= 6 ? string.Join(' ', words) : string.Join(' ', words.Take(6)) + " …";
+    }
+
+    /// <summary>adb's own reason ("error: device offline"), as ": reason", or nothing when it printed none.</summary>
+    private static string FirstLine(string error)
+    {
+        var line = error.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).FirstOrDefault();
+        return string.IsNullOrEmpty(line) ? "" : ": " + (line.Length > 160 ? line[..160] + "…" : line);
+    }
+}
+
+/// <summary>
+/// When the USB loop's state reaches the log: once when it changes, and a lasting error again every minute with how
+/// many rounds it has failed. Without the repeat an outage was one line followed by silence, which read the same as
+/// a loop that had stopped.
+/// </summary>
+internal sealed class StateLog(long repeatMs = 60_000)
+{
+    private string _state = "";
+    private long _since, _logged;
+    private int _count;
+
+    /// <returns>The line to write, or null for nothing.</returns>
+    public string? Next(string state, bool repeat, long now)
+    {
+        if (state != _state)
+        {
+            _state = state;
+            _since = _logged = now;
+            _count = 1;
+            return state;
+        }
+        _count++;
+        if (!repeat || now - _logged < repeatMs) return null;
+        _logged = now;
+        return $"{state} (still, {_count} times in {(now - _since) / 1000} s)";
     }
 }
