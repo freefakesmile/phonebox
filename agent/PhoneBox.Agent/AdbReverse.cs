@@ -8,7 +8,8 @@ namespace PhoneBox.Agent;
 /// <see cref="UsbLink"/>). When a phone is newly plugged in, wakes it and opens the panel
 /// (unless Settings › Display › open on connect is off).
 /// </summary>
-public sealed class AdbReverse(ConfigStore cfg, ILogger<AdbReverse> log, AgentEndpoint? endpoint = null, UsbLink? usb = null) : BackgroundService
+public sealed class AdbReverse(ConfigStore cfg, ILogger<AdbReverse> log, AgentEndpoint? endpoint = null, UsbLink? usb = null,
+    IHostApplicationLifetime? lifetime = null) : BackgroundService
 {
     public const string PanelActivity = "net.oxog.phonebox.deskpanel/.MainActivity";
     private const string HomeAlias = "net.oxog.phonebox.deskpanel/.HomeAlias";
@@ -64,26 +65,51 @@ public sealed class AdbReverse(ConfigStore cfg, ILogger<AdbReverse> log, AgentEn
 #if WINDOWS
         Microsoft.Win32.SystemEvents.SessionEnding += (_, _) => MarkSessionEnding();
 #endif
-        while (!ct.IsCancellationRequested)
+        lifetime?.ApplicationStopping.Register(RemoveBeforeThePortCloses);
+        while (!ct.IsCancellationRequested && !_stopping)
         {
             // while the session is ending nothing is started; the loop goes on, for a shutdown that is cancelled
             if (SessionEnding) { await Task.Delay(TimeSpan.FromSeconds(4), ct); continue; }
-            try { await Ensure(ct); }
+            try { await _round.WaitAsync(ct); }
+            catch (OperationCanceledException) { return; }
+            try { if (!_stopping) await Ensure(ct); }
             catch (OperationCanceledException) { return; }
             catch (Exception ex) { Report($"adb error: {ex.Message}", repeat: true); }
+            finally { _round.Release(); }
             await Task.Delay(TimeSpan.FromSeconds(4), ct);
         }
     }
 
+    private volatile bool _stopping;
+    private readonly SemaphoreSlim _round = new(1, 1); // one Ensure round at a time, and none while the rule comes off
+
     /// <summary>
     /// A regular stop (Quit in the tray, an update, a restart) takes this agent's rule off the phone. Left behind, it
     /// points at a port nobody listens on any more; the panel keeps connecting there, and the adb server stopped
-    /// answering everyone (the next agent included) until it was restarted.
+    /// answering everyone (the next agent included) until it was restarted. It has to happen when the stop begins:
+    /// the agent's port closes before the services are stopped, and the adb server hung within a second of that.
     /// </summary>
+    private void RemoveBeforeThePortCloses()
+    {
+        _stopping = true;
+        // a round in progress could put the rule back right after it is removed: wait a little for it to finish
+        var idle = _round.Wait(TimeSpan.FromSeconds(2));
+        try
+        {
+            // on the thread pool: Quit in the tray stops the agent from the UI thread, whose context the awaits
+            // inside would wait for while this blocks it
+            Task.Run(() => RemoveOwnRulesAsync(CancellationToken.None)).Wait(TimeSpan.FromSeconds(4));
+        }
+        catch (AggregateException) { }
+        finally { if (idle) _round.Release(); }
+    }
+
     public override async Task StopAsync(CancellationToken cancellationToken)
     {
-        await base.StopAsync(cancellationToken); // the loop first, so it can't put the rule back
-        await RemoveOwnRulesAsync(cancellationToken);
+        var removed = _stopping; // already done when the stop began (lifetime above); not in the tests
+        _stopping = true;
+        await base.StopAsync(cancellationToken);
+        if (!removed) await RemoveOwnRulesAsync(cancellationToken);
     }
 
     internal async Task RemoveOwnRulesAsync(CancellationToken ct)
