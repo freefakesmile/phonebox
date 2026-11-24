@@ -24,6 +24,8 @@ public sealed class AfterburnerMonitor(PushStore push, ILogger<AfterburnerMonito
     internal sealed record Reading(string Name, string Units, float Value, uint Gpu);
 
     private volatile IReadOnlyList<Reading>? _last;
+    /// <summary>The GPUs' names and drivers from the version 2 header's GPU entries, by Afterburner's GPU index.</summary>
+    private volatile IReadOnlyList<(string Name, string? Driver)> _gpuNames = [];
     private long _lastAt;
     private readonly Dictionary<string, double> _sent = [];
 
@@ -61,6 +63,76 @@ public sealed class AfterburnerMonitor(PushStore push, ILogger<AfterburnerMonito
             return null;
         }
     }
+
+    /// <summary>
+    /// The GPUs as Afterburner sees them (load, temperature, power, memory in use, clocks, fan), so with Afterburner as the
+    /// sensor source the agent needn't ask Windows' GPU counters every 2 s. Null while Afterburner isn't selected, isn't
+    /// running, or monitors no GPU sensor.
+    /// </summary>
+    public IReadOnlyList<GpuInfo>? Gpus()
+    {
+        if (_last is not { } r || Environment.TickCount64 - Interlocked.Read(ref _lastAt) > 5000) return null;
+        return GpusFrom(r, _gpuNames);
+    }
+
+    internal static IReadOnlyList<GpuInfo>? GpusFrom(IReadOnlyList<Reading> readings, IReadOnlyList<(string Name, string? Driver)> names)
+    {
+        var list = new List<GpuInfo>();
+        foreach (var gpu in readings.Where(x => x.Gpu != NoGpu && Valid(x.Value)).GroupBy(x => x.Gpu).OrderBy(g => g.Key))
+        {
+            double? Get(string name, string? units = null) => gpu.FirstOrDefault(s => s.Name.Equals(name, StringComparison.OrdinalIgnoreCase)
+                && (units is null || s.Units.Equals(units, StringComparison.OrdinalIgnoreCase))) is { } hit ? hit.Value : null;
+            var (name, driver) = gpu.Key < names.Count ? names[(int)gpu.Key] : ($"GPU {gpu.Key + 1}", null);
+            var util = Get("GPU usage");
+            var temp = Get("GPU temperature");
+            if (util is null && temp is null) continue; // no load or temperature: nothing worth showing for it
+            var memMb = Get("Memory usage", "MB");
+            list.Add(new GpuInfo(name,
+                Util: util is { } u ? Math.Round(u, 1) : null,
+                Temp: temp is { } t ? Math.Round(t, 1) : null,
+                Power: Get("Power", "W") is { } w ? Math.Round(w, 1) : null,
+                PowerLimit: null,
+                VramUsed: memMb is { } mb ? Math.Round(mb / 1024, 2) : null,
+                VramTotal: null,
+                Fan: Get("Fan speed", "%") is { } f ? Math.Round(f) : null,
+                Clock: Get("Core clock") is { } c ? Math.Round(c) : null,
+                Vendor: global::PhoneBox.Agent.Gpus.VendorOf(name), Source: "afterburner",
+                MemClock: Get("Memory clock") is { } m ? Math.Round(m) : null,
+                PowerPct: Get("Power", "%") is { } pp ? Math.Round(pp, 1) : null,
+                FanRpm: Get("Fan tachometer") is { } rpm ? Math.Round(rpm) : null,
+                Driver: driver));
+        }
+        return list.Count > 0 ? list : null;
+    }
+
+    /// <summary>
+    /// The GPU entries after the sensor entries (header version 2: their count at offset 24, their size at 28): the GPU id,
+    /// family, device name and driver, 260 bytes each. Empty for an older header or anything that doesn't fit.
+    /// </summary>
+    internal static IReadOnlyList<(string Name, string? Driver)> ParseGpuNames(ReadOnlySpan<byte> mem)
+    {
+        if (mem.Length < 32 || BitConverter.ToUInt32(mem[..4]) != Signature) return [];
+        var headerSize = (int)BitConverter.ToUInt32(mem[8..12]);
+        var count = (long)BitConverter.ToUInt32(mem[12..16]);
+        var entrySize = (long)BitConverter.ToUInt32(mem[16..20]);
+        if (headerSize < 32) return []; // version 1: no GPU entries
+        var gpus = BitConverter.ToUInt32(mem[24..28]);
+        var gpuSize = (long)BitConverter.ToUInt32(mem[28..32]);
+        if (gpus is 0 or > 16 || gpuSize < GpuDriverAt + 260) return [];
+        var list = new List<(string, string?)>();
+        for (var i = 0L; i < gpus; i++)
+        {
+            var at = headerSize + count * entrySize + i * gpuSize;
+            if (at < 0 || at + gpuSize > mem.Length) break;
+            var e = mem.Slice((int)at, (int)gpuSize);
+            var device = Text(e.Slice(GpuDeviceAt, 260));
+            var driver = Text(e.Slice(GpuDriverAt, 260));
+            list.Add((device.Length > 0 ? device : $"GPU {i + 1}", driver.Length > 0 ? driver : null));
+        }
+        return list;
+    }
+
+    private const int GpuDeviceAt = 520, GpuDriverAt = 780;
 
     /// <summary>
     /// The sensors Afterburner reports now, for the settings page's checkboxes: key, name, units and whether it is sent.
@@ -187,6 +259,7 @@ public sealed class AfterburnerMonitor(PushStore push, ILogger<AfterburnerMonito
     private void Clear()
     {
         _last = null;
+        _gpuNames = [];
         if (_sent.Count == 0) return;
         foreach (var key in _sent.Keys) push.RemoveLive(key);
         _sent.Clear();
@@ -270,9 +343,17 @@ public sealed class AfterburnerMonitor(PushStore push, ILogger<AfterburnerMonito
         if (View() is not { } v || Layout(v) is not { } layout) return null;
         var (headerSize, count, entrySize) = layout;
         var length = headerSize + count * entrySize;
+        // version 2: the GPU entries (names) follow the sensors; read them too when they fit
+        if (headerSize >= 32)
+        {
+            var gpus = (long)v.ReadUInt32(24) * v.ReadUInt32(28);
+            if (gpus is > 0 and <= 16 * 8192 && length + gpus <= v.Capacity) length += (int)gpus;
+        }
         if (_buf.Length < length) _buf = new byte[length];
         v.ReadArray(0, _buf, 0, length);
-        return Parse(_buf.AsSpan(0, length));
+        var mem = _buf.AsSpan(0, length);
+        _gpuNames = ParseGpuNames(mem);
+        return Parse(mem);
     }
 
     /// <summary>The sensors in a copy of the shared memory, or null when it is not (or no longer) Afterburner's.</summary>

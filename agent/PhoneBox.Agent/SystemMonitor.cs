@@ -70,7 +70,7 @@ public sealed partial class SystemMonitor(ILogger<SystemMonitor> log, ConfigStor
 
             var (memUsed, memTotal) = Memory();
             const double Gb = 1024d * 1024 * 1024;
-            var gpus = Gpus.Compose(_nvidia, _lhmGpus, _osGpus);
+            var gpus = Gpus.Compose(AfterburnerGpus(), _nvidia, _lhmGpus, _osGpus);
 
             _snap = new PcSnapshot(
                 Cpu: cpu is { } c ? Math.Round(c, 1) : null,
@@ -134,6 +134,22 @@ public sealed partial class SystemMonitor(ILogger<SystemMonitor> log, ConfigStor
         }
     }
 
+    /// <summary>Afterburner's GPUs when it is the sensor source and running; they come before every other source.</summary>
+    private IReadOnlyList<GpuInfo>? AfterburnerGpus() => afterburner is not null && afterburner.Selected ? afterburner.Gpus() : null;
+
+    /// <summary>
+    /// Seconds to the next OS GPU reading: 2 normally; 30 while Afterburner reports every discrete GPU the OS knows, since
+    /// it already has their load, temperature and memory in use, and Windows' GPU counters cost the most of this sampling.
+    /// The slow readings still give what Afterburner lacks (memory size, integrated or not).
+    /// </summary>
+    internal static int OsGpuSeconds(IReadOnlyList<GpuInfo>? os, IReadOnlyList<GpuInfo>? afterburner)
+    {
+        if (os is not { Count: > 0 }) return 60; // nothing to read (no GPU driver, a VM): look again now and then
+        if (afterburner is not { Count: > 0 }) return 2;
+        var covered = afterburner.Select(g => Gpus.Key(g.Name)).ToHashSet();
+        return os.Where(g => !g.Integrated).All(g => covered.Contains(Gpus.Key(g.Name))) ? 30 : 2;
+    }
+
     // Every vendor's GPU through the OS: Windows' graphics kernel and GPU counters, Linux sysfs (amdgpu, i915/xe).
     private async Task OsGpuLoop(CancellationToken ct)
     {
@@ -157,8 +173,9 @@ public sealed partial class SystemMonitor(ILogger<SystemMonitor> log, ConfigStor
                 if (failures++ == 0) log.LogWarning("gpu: {Msg}", ex.Message);
                 _osGpus = null;
             }
-            // nothing to read (no GPU driver, a VM): look again now and then
-            await Task.Delay(_osGpus is { Count: > 0 } ? TimeSpan.FromSeconds(2) : TimeSpan.FromSeconds(60), ct);
+            // in steps of 2 s, so the 2 s rate is back soon after Afterburner stops reporting
+            for (var waited = 0; waited < OsGpuSeconds(_osGpus, AfterburnerGpus()); waited += 2)
+                await Task.Delay(TimeSpan.FromSeconds(2), ct);
         }
     }
 

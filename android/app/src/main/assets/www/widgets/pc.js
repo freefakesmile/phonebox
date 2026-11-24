@@ -1403,7 +1403,7 @@ W.nextup = {
 // One GPU in detail: load, memory, temperatures, power, clocks and fan. NVIDIA comes from nvidia-smi; AMD and Intel
 // from Windows' own GPU counters (temperature, VRAM, load), richer with LibreHardwareMonitor (hot spot, watts, fan, clocks).
 const GPU_VENDOR = { nvidia: 'NVIDIA', amd: 'AMD', intel: 'Intel', apple: 'Apple', qualcomm: 'Qualcomm' };
-const GPU_SOURCE = { 'nvidia-smi': 'nvidia-smi', lhm: 'LibreHardwareMonitor', windows: 'Windows', sysfs: 'sysfs', ioreg: 'ioreg' };
+const GPU_SOURCE = { afterburner: 'MSI Afterburner', 'nvidia-smi': 'nvidia-smi', lhm: 'LibreHardwareMonitor', windows: 'Windows', sysfs: 'sysfs', ioreg: 'ioreg' };
 
 W.gpu = {
   needs: ['state'],
