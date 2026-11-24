@@ -45,7 +45,19 @@ public sealed partial class SystemMonitor(ILogger<SystemMonitor> log, ConfigStor
     {
         _ = Task.Run(() => GpuLoop(ct), ct);
         _ = Task.Run(() => CpuTempLoop(ct), ct);
+        NetworkChange.NetworkAddressChanged += NetworkChanged;
+        NetworkChange.NetworkAvailabilityChanged += NetworkChanged;
+        try { await Sample(ct); }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested) { }
+        finally
+        {
+            NetworkChange.NetworkAddressChanged -= NetworkChanged;
+            NetworkChange.NetworkAvailabilityChanged -= NetworkChanged;
+        }
+    }
 
+    private async Task Sample(CancellationToken ct)
+    {
         var (idle0, total0) = CpuTimes();
         var net0 = NetBytes(Chosen());
         var t0 = Stopwatch.GetTimestamp();
@@ -402,10 +414,32 @@ public sealed partial class SystemMonitor(ILogger<SystemMonitor> log, ConfigStor
         .Select(ni => (object)new { name = ni.Name, description = ni.Description, auto = Counted(ni.Name, ni.Description, ni.NetworkInterfaceType, []) })
         .ToList();
 
-    private static Dictionary<string, (long Rx, long Tx)> NetBytes(IReadOnlyList<string> chosen)
+    // The adapter list, kept between the 1 s readings: listing the adapters costs far more than reading their byte counts.
+    // It is listed again when Windows reports an address or availability change, and every 30 s in any case (an adapter's
+    // up/down state in the list is the one it had when listed).
+    private NetworkInterface[]? _nics;
+    private long _nicsAt;
+    private volatile bool _nicsStale = true;
+    internal const long NicsMaxAgeMs = 30_000;
+
+    private void NetworkChanged(object? sender, EventArgs e) => _nicsStale = true;
+
+    private NetworkInterface[] Nics()
+    {
+        var now = Environment.TickCount64;
+        if (_nics is null || _nicsStale || now - _nicsAt >= NicsMaxAgeMs)
+        {
+            _nicsStale = false; // before listing: a change during the listing marks it stale again
+            _nics = NetworkInterface.GetAllNetworkInterfaces();
+            _nicsAt = now;
+        }
+        return _nics;
+    }
+
+    private Dictionary<string, (long Rx, long Tx)> NetBytes(IReadOnlyList<string> chosen)
     {
         var counters = new Dictionary<string, (long Rx, long Tx)>();
-        foreach (var ni in NetworkInterface.GetAllNetworkInterfaces())
+        foreach (var ni in Nics())
         {
             if (ni.OperationalStatus != OperationalStatus.Up) continue;
             if (!Counted(ni.Name, ni.Description, ni.NetworkInterfaceType, chosen)) continue;

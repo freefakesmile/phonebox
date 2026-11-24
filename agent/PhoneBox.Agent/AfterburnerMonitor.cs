@@ -29,8 +29,24 @@ public sealed class AfterburnerMonitor(PushStore push, ILogger<AfterburnerMonito
     private long _lastAt;
     private readonly Dictionary<string, double> _sent = [];
 
-    internal bool Selected => config?.Get().Sensors.Source == SensorsConfig.Afterburner;
-    private int PollMs => config?.Get().Sensors.AfterburnerPollMs ?? SensorsConfig.DefaultPollMs;
+    // The loop looks at the shared memory every 100 ms and needs three settings each time; ConfigStore.Get() looks at the
+    // file's write time on every call, so the settings are taken from it at most once a second.
+    private sealed record CachedSensors(SensorsConfig? Value, long At);
+    private volatile CachedSensors? _sensors;
+    internal const long SettingsMs = 1000;
+
+    private SensorsConfig? Settings()
+    {
+        if (config is null) return null;
+        var now = Environment.TickCount64;
+        if (_sensors is { } c && now - c.At < SettingsMs) return c.Value;
+        var s = config.Get().Sensors;
+        _sensors = new(s, now);
+        return s;
+    }
+
+    internal bool Selected => Settings()?.Source == SensorsConfig.Afterburner;
+    private int PollMs => Settings()?.AfterburnerPollMs ?? SensorsConfig.DefaultPollMs;
     internal const string FrametimeMaxName = "Frametime max"; // published as ab.frametime-max
     private string? _allowedText;
     private HashSet<string>? _allowed;
@@ -47,7 +63,7 @@ public sealed class AfterburnerMonitor(PushStore push, ILogger<AfterburnerMonito
 
     private HashSet<string>? Allowed()
     {
-        var text = config?.Get().Sensors.AfterburnerKeys ?? "";
+        var text = Settings()?.AfterburnerKeys ?? "";
         if (text != _allowedText) { _allowedText = text; _allowed = AllowedKeys(text); }
         return _allowed;
     }
