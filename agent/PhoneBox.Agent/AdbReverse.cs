@@ -72,13 +72,24 @@ public sealed class AdbReverse(ConfigStore cfg, ILogger<AdbReverse> log, AgentEn
             if (SessionEnding) { await Task.Delay(TimeSpan.FromSeconds(4), ct); continue; }
             try { await _round.WaitAsync(ct); }
             catch (OperationCanceledException) { return; }
+            _steady = false;
             try { if (!_stopping) await Ensure(ct); }
             catch (OperationCanceledException) { return; }
             catch (Exception ex) { Report($"adb error: {ex.Message}", repeat: true); }
             finally { _round.Release(); }
-            await Task.Delay(TimeSpan.FromSeconds(4), ct);
+            await Task.Delay(TimeSpan.FromSeconds(NextRoundSec(_steady, cfg.Get().Features.AdbSteadySec)), ct);
         }
     }
+
+    /// <summary>The last round found every phone with its rule and key in place and had nothing to do.</summary>
+    private bool _steady;
+
+    /// <summary>
+    /// Seconds to the next round: Settings › Features › adb check interval once all is in place, otherwise 4 s, so a
+    /// phone being set up (or with something left to do) is never kept waiting.
+    /// </summary>
+    internal static int NextRoundSec(bool steady, int steadySec) =>
+        steady ? Math.Clamp(steadySec, FeaturesConfig.DefaultAdbSec, FeaturesConfig.MaxAdbSec) : FeaturesConfig.DefaultAdbSec;
 
     private volatile bool _stopping;
     private readonly SemaphoreSlim _round = new(1, 1); // one Ensure round at a time, and none while the rule comes off
@@ -296,6 +307,7 @@ public sealed class AdbReverse(ConfigStore cfg, ILogger<AdbReverse> log, AgentEn
         // A phone that did not answer "reverse --list" sits out the rest of this round (home screen, keep awake): one
         // more failure there would end the round before the phones after it. The next round tries it again.
         var unreachable = new HashSet<string>();
+        var busy = refreshKeys || problem is not null; // anything set up, retried or wrong this round: no long wait after it
         Dictionary<string, string>? transports = null; // read at most once a round, only for Android 5 and 6
         foreach (var d in devices)
         {
@@ -340,6 +352,7 @@ public sealed class AdbReverse(ConfigStore cfg, ILogger<AdbReverse> log, AgentEn
             var ruled = listable ? HasOwnRule(list) : _reverseSet.Contains(d);
             var keyed = usb is null || KeyAskedRecently(d, usb.HasKey(d) && !refreshKeys ? KeyRefreshMs : KeyRetryMs);
             if (ruled && keyed && !_missingApp.Contains(d)) continue;
+            busy = true;
             // is the app there at all? (the agent may have been installed on its own, with winget or Scoop)
             var installed = (await Adb(adb, $"-s {d} shell pm path net.oxog.phonebox.deskpanel", ct, anyExit: true)).Contains("package:");
             _missingApp = installed ? _missingApp.Where(x => x != d).ToArray() : _missingApp.Union([d]).ToArray();
@@ -371,6 +384,7 @@ public sealed class AdbReverse(ConfigStore cfg, ILogger<AdbReverse> log, AgentEn
         {
             foreach (var d in devices.Where(d => !_homeSet.Contains(d) && !unreachable.Contains(d)))
             {
+                busy = true;
                 // Android answers a refusal with exit code 1; that must not end the round for the other phones and keep-awake.
                 var r = await Adb(adb, $"-s {d} shell cmd package set-home-activity {HomeAlias}", ct, anyExit: true);
                 if (!r.Contains("Success")) continue; // the app has not enabled its home entry yet; try again shortly
@@ -385,6 +399,7 @@ public sealed class AdbReverse(ConfigStore cfg, ILogger<AdbReverse> log, AgentEn
         {
             foreach (var d in devices.Where(d => !_awakeSet.Contains(d) && !_missingApp.Contains(d) && !unreachable.Contains(d)))
             {
+                busy = true;
                 await Adb(adb, $"-s {d} shell settings put secure screensaver_enabled 0", ct);
                 await Adb(adb, $"-s {d} shell settings put secure screensaver_activate_on_dock 0", ct);
                 await Adb(adb, $"-s {d} shell settings put secure screensaver_activate_on_sleep 0", ct);
@@ -394,6 +409,7 @@ public sealed class AdbReverse(ConfigStore cfg, ILogger<AdbReverse> log, AgentEn
             }
         }
         else _awakeSet.Clear();
+        _steady = !busy && unreachable.Count == 0;
         Report($"phone connected: {Devices}");
     }
 

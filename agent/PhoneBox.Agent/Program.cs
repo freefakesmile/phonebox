@@ -644,6 +644,8 @@ app.MapPost("/api/ha/toggle/{id}", async (string id, HomeAssistant ha) =>
     await ha.ToggleAsync(id) is { } error ? Results.BadRequest(new { error }) : Results.Ok(new { ok = true }));
 // Settings › General › Ping & network: the connected adapters to pick from (local only, not on the Wi-Fi list)
 app.MapGet("/api/network/adapters", (ConfigStore cfg) => Results.Json(SystemMonitor.Adapters(cfg.Get().Ping.Adapters)));
+// Settings › General › Features › Afterburner sensors: what Afterburner reports now, for the checkboxes (local only)
+app.MapGet("/api/afterburner/sensors", (AfterburnerMonitor ab) => Results.Json(ab.Sensors()));
 
 // Settings › widget › Home Assistant entities: the picker's list (local only, not on the Wi-Fi allow-list)
 app.MapGet("/api/ha/entities", async (HomeAssistant ha) => Results.Json(await ha.ListEntitiesAsync()));

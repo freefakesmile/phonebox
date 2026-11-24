@@ -9,7 +9,7 @@ public sealed record GhSnapshot(string? User, int Notifications, IReadOnlyList<G
     long? UpdatedAt, string? Error);
 
 /// <summary>Collects a pull request and notification summary through the GitHub CLI (gh) every 3 minutes.</summary>
-public sealed class GitHubMonitor(ILogger<GitHubMonitor> log) : BackgroundService
+public sealed class GitHubMonitor(ILogger<GitHubMonitor> log, ConfigStore? config = null) : BackgroundService
 {
     private const string Query = """
         query {
@@ -39,6 +39,13 @@ public sealed class GitHubMonitor(ILogger<GitHubMonitor> log) : BackgroundServic
         await Task.Delay(3000, ct);
         while (!ct.IsCancellationRequested)
         {
+            // switched off in Settings › Features: gh is never run; looked at again on a refresh or after 30 s
+            if (config?.Get().Features.GitHub == false)
+            {
+                _snap = null;
+                await Wake.Delay(TimeSpan.FromSeconds(30), ct);
+                continue;
+            }
             try { _snap = await Fetch(ct); }
             catch (OperationCanceledException) when (ct.IsCancellationRequested) { return; }
             catch (Exception ex)

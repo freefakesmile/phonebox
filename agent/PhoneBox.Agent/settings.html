@@ -67,6 +67,10 @@ input:focus, select:focus, textarea:focus { border-color: var(--accent); }
 .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 0 16px; }
 .check { display: inline-flex; align-items: center; gap: 7px; cursor: pointer; user-select: none; margin-right: 14px; }
 .check input { accent-color: var(--accent); width: 16px; height: 16px; }
+.ab-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px 14px; margin-top: 4px; }
+.ab-grid .check { margin-right: 0; min-width: 0; }
+.ab-grid .check span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+@media (max-width: 520px) { .ab-grid { grid-template-columns: 1fr; } }
 .ha-row { padding: 8px 0; border-bottom: 1px solid var(--line, rgba(255,255,255,.08)); }
 .ha-row input[type=text] { min-width: 0; }
 
@@ -793,13 +797,22 @@ nav a.on::before { color: var(--accent); }
         <div class="row" style="margin-bottom:8px"><label class="switch"><input type="checkbox" data-bind="features.ai"><span></span></label> <span data-i18n="s.features.ai">AI integrations (coding-agent sessions, AI quotas and CodexBar, permission prompts on the phone)</span></div>
         <div class="row" style="margin-bottom:8px"><label class="switch"><input type="checkbox" data-bind="features.processes"><span></span></label> <span data-i18n="s.features.processes">Process list (Processes widget)</span></div>
         <div class="row" style="margin-bottom:8px"><label class="switch"><input type="checkbox" data-bind="features.media"><span></span></label> <span data-i18n="s.features.media">Now playing (Media widgets and media controls)</span></div>
+        <div class="row" style="margin-bottom:8px"><label class="switch"><input type="checkbox" data-bind="features.ping"><span></span></label> <span data-i18n="s.features.ping">Ping (ping metric and the "ping high" rule)</span></div>
+        <div class="row" style="margin-bottom:8px"><label class="switch"><input type="checkbox" data-bind="features.privacy"><span></span></label> <span data-i18n="s.features.privacy">Microphone and camera in use (On air widget, mic and camera rules)</span></div>
+        <div class="row" style="margin-bottom:8px"><label class="switch"><input type="checkbox" data-bind="features.gitHub"><span></span></label> <span data-i18n="s.features.github">GitHub pull requests and notifications through gh (Work widget)</span></div>
+        <div class="row" style="margin-bottom:8px"><label class="switch"><input type="checkbox" data-bind="features.updateCheck"><span></span></label> <span data-i18n="s.features.updateCheck">Look for updates every 6 hours (off: only Settings › Updates › Check now)</span></div>
+        <div class="field" style="max-width:420px"><label data-i18n="s.features.adbSec">USB check while the phone is connected and set up, every (s, 4–60)</label><input type="number" min="4" max="60" step="1" data-bind="features.adbSteadySec" data-type="int">
+          <p class="hint" style="margin:6px 0 0" data-i18n="s.features.adbSecHint">A phone plugged in again (or a restarted adb) is noticed within this time. Anything still to set up is checked every 4 s.</p></div>
         <div class="field" style="margin-top:12px"><label for="sensorsSource" data-i18n="s.sensors.source">Hardware sensors</label>
           <select id="sensorsSource" data-bind="sensors.source"><option value="lhm" data-i18n="s.sensors.lhm">LibreHardwareMonitor (CPU temperature)</option><option value="afterburner" data-i18n="s.sensors.afterburner">MSI Afterburner (CPU temperature, FPS and every sensor it monitors)</option></select>
           <p class="hint" style="margin:6px 0 0" data-i18n="s.sensors.hint">With Afterburner, each of its sensors is a live pushed value for the Pushed value widget: ab.framerate, ab.frametime, ab.cpu-temperature, ab.gpu-temperature, ab.gpu-usage, ab.power … FPS needs RivaTuner Statistics Server running.</p></div>
         <div class="field" style="max-width:420px"><label data-i18n="s.sensors.poll">Afterburner values sent to the phone at most every (ms, 100–2000)</label><input type="number" min="100" max="2000" step="50" data-bind="sensors.afterburnerPollMs" data-type="int"></div>
-        <div class="field"><label data-i18n="s.sensors.keys">Afterburner sensors sent to the phone (empty = all)</label><input type="text" data-bind="sensors.afterburnerKeys" placeholder="framerate, frametime-max, gpu-temperature">
-          <p class="hint" style="margin:6px 0 0" data-i18n="s.sensors.keysHint">Keys without "ab.", separated by commas. Sensors that aren't listed are still read but not sent, so one that changes on every reading doesn't make the phone fetch the values again. Rules and shortcuts see only the ones sent.</p>
+        <div class="field"><label data-i18n="s.sensors.keysPick">Afterburner sensors sent to the phone</label>
+          <div id="abSensors" class="ab-grid"></div>
+          <p class="hint" style="margin:6px 0 0" data-i18n="s.sensors.keysPickHint">The list is what Afterburner monitors right now (Afterburner › Settings › Monitoring chooses which sensors it collects). Unticked sensors are not sent, so one that changes on every reading doesn't make the phone fetch the values again. Rules and shortcuts see only the ones sent.</p>
           <p class="hint" style="margin:6px 0 0" data-i18n="s.sensors.pollHint">The agent follows Afterburner's own samples (set by its Hardware polling period, Settings › Monitoring) and sends a new one no more often than this. Under 1000 ms charts move at that rate (a little more work for the agent). ab.frametime-max is always the slowest frame of the last second.</p></div>
+        <div class="row" style="margin:12px 0 0"><label class="switch"><input type="checkbox" data-bind="sensors.nvidiaSmi"><span></span></label> <span data-i18n="s.sensors.nvidiaSmi">nvidia-smi for NVIDIA cards (power, fan and clocks)</span></div>
+        <p class="hint" style="margin:6px 0 8px" data-i18n="s.sensors.nvidiaSmiHint">Off, the agent never starts nvidia-smi. GPU load, memory and temperature still come from Windows; with Afterburner its ab.* values have the rest.</p>
         <div class="row" style="margin:12px 0 8px"><label class="switch"><input type="checkbox" data-bind="pageKeys.enabled"><span></span></label> <span data-i18n="s.pageKeys.enabled">Keyboard shortcuts flip the phone's pages (over USB)</span></div>
         <div class="row" style="gap:12px">
           <div class="field" style="flex:1"><label data-i18n="s.pageKeys.prev">Previous page</label><input type="text" data-bind="pageKeys.prev" placeholder="Ctrl+Alt+Left"></div>
@@ -2444,6 +2457,36 @@ async function renderNetAdapters() {
     ' ', h('span', {}, a.name), a.description ? h('small', { style: 'color:var(--muted)' }, ' · ' + a.description) : '',
     a.auto ? h('small', { style: 'color:var(--muted)' }, ' · ' + t('s.net.auto')) : '')));
 }
+// ---------------------------------------------------------------- Afterburner sensors (Settings › General › Features)
+// sensors.afterburnerKeys stays a comma list: empty = every sensor (new ones too), "none" = none.
+const AB_NONE = 'none';
+function abKeys(text) {
+  return (text || '').split(/[,;\s]+/).map((k) => k.trim().toLowerCase().replace(/^ab\./, '')).filter(Boolean);
+}
+async function renderAbSensors() {
+  cfg.sensors ??= {};
+  const box = $('abSensors');
+  if (!box) return;
+  let list = [];
+  try { list = await (await fetch('/api/afterburner/sensors')).json(); } catch (_) {}
+  const chosen = abKeys(cfg.sensors.afterburnerKeys);
+  const all = chosen.length === 0;
+  // a chosen sensor Afterburner isn't reporting now stays in the list, so the next save doesn't drop it
+  for (const key of chosen) if (key !== AB_NONE && !list.some((s) => s.key === key)) list.push({ key, name: key, units: '' });
+  // only the agent's own frametime-max: Afterburner isn't selected (and saved) or isn't running
+  if (list.length <= 1) {
+    box.replaceChildren(h('span', { class: 'hint' }, t('s.sensors.none')));
+    return;
+  }
+  const write = () => {
+    const ticked = [...box.querySelectorAll('input')].filter((i) => i.checked).map((i) => i.value);
+    cfg.sensors.afterburnerKeys = ticked.length === list.length ? '' : ticked.length ? ticked.join(', ') : AB_NONE;
+    changed();
+  };
+  box.replaceChildren(...list.map((s) => h('label', { class: 'check', title: `ab.${s.key}` },
+    h('input', { type: 'checkbox', value: s.key, checked: all || chosen.includes(s.key), onchange: write }),
+    h('span', {}, s.name, s.units ? h('small', { style: 'color:var(--muted)' }, ` · ${s.units}`) : ''))));
+}
 // ---------------------------------------------------------------- news feeds
 function parseFeedsInput(text, defaultCategory = '') {
   const list = [];
@@ -3750,7 +3793,7 @@ async function load() {
   // in English that has display.language = "vi" would otherwise render every editor in English and never rebuild them
   if (window.PhoneBoxI18n) applyLanguageUi(cfg.display?.language || 'auto');
   else localizeCatalog();
-  renderPages(); renderDeck(); renderRules(); renderCalendars(); renderFeeds(); renderCameras(); renderConsole(); renderNetAdapters(); renderCharge(); bindForm();
+  renderPages(); renderDeck(); renderRules(); renderCalendars(); renderFeeds(); renderCameras(); renderConsole(); renderNetAdapters(); renderAbSensors();renderCharge(); bindForm();
   // the editors fill in the sections and fields they own (feeds, cameras, an action's "enabled", ...), so the
   // baseline is taken after they ran: otherwise a freshly loaded page already counts as unsaved, and Revert can never
   // get back to a clean state
@@ -3789,7 +3832,7 @@ async function doSave() {
 }
 
 $('save').onclick = save;
-$('revert').onclick = () => { cfg = JSON.parse(saved); renderPages(); renderDeck(); renderRules(); renderCalendars(); renderFeeds(); renderCameras(); renderConsole(); renderNetAdapters(); renderPhones(); renderCharge(); bindForm(); changed(); };
+$('revert').onclick = () => { cfg = JSON.parse(saved); renderPages(); renderDeck(); renderRules(); renderCalendars(); renderFeeds(); renderCameras(); renderConsole(); renderNetAdapters(); renderAbSensors();renderPhones(); renderCharge(); bindForm(); changed(); };
 // Over USB this also wakes the phone and brings the panel to the front (adb); over Wi-Fi the phone switches to the
 // page selected in the editor through the live stream.
 $('openPhone').onclick = async () => {
@@ -3890,7 +3933,7 @@ $('applyJson').onclick = () => {
     cfg = c;
     fillDefaults();
     $('jsonErr').textContent = '';
-    renderPages(); renderDeck(); renderRules(); renderCalendars(); renderFeeds(); renderCameras(); renderConsole(); renderNetAdapters(); renderPhones(); renderCharge(); bindForm(); changed(); toast(t('s.jsonLoaded'));
+    renderPages(); renderDeck(); renderRules(); renderCalendars(); renderFeeds(); renderCameras(); renderConsole(); renderNetAdapters(); renderAbSensors();renderPhones(); renderCharge(); bindForm(); changed(); toast(t('s.jsonLoaded'));
   }
   catch (e) { $('jsonErr').textContent = e instanceof SyntaxError ? tc('Invalid settings JSON.') : e.message; }
 };

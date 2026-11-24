@@ -62,6 +62,23 @@ public sealed class AfterburnerMonitor(PushStore push, ILogger<AfterburnerMonito
         }
     }
 
+    /// <summary>
+    /// The sensors Afterburner reports now, for the settings page's checkboxes: key, name, units and whether it is sent.
+    /// Empty while Afterburner isn't selected or running. "ab.frametime-max" is the agent's own and always listed.
+    /// </summary>
+    public IReadOnlyList<object> Sensors()
+    {
+        var allowed = Allowed();
+        var readings = _last ?? [];
+        return readings.Append(new Reading(FrametimeMaxName, "ms", 0, NoGpu))
+            .Select(r => (Key: Key(r), r.Name, r.Units, r.Gpu))
+            .Where(x => x.Key is not null)
+            .DistinctBy(x => x.Key)
+            .Select(x => (object)new { key = x.Key![KeyPrefix.Length..], name = x.Gpu != NoGpu && x.Gpu > 0 ? $"{x.Name} (GPU{x.Gpu + 1})" : x.Name,
+                units = x.Units, sent = allowed is null || allowed.Contains(x.Key) })
+            .ToList();
+    }
+
     // How often the shared memory is looked at. Only a new Afterburner sample (its readings changed) is processed, so the
     // agent follows Afterburner's own polling period instead of beating against it with a timer of its own.
     private const int CheckMs = 100;

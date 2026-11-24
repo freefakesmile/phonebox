@@ -102,7 +102,8 @@ public sealed class UpdateService(ConfigStore cfg, AdbReverse adb, IHostApplicat
         var nextCheck = DateTime.MinValue;
         while (!ct.IsCancellationRequested)
         {
-            if (DateTime.UtcNow >= nextCheck)
+            // Settings › Features › update check off: only the settings page's own "check now" asks GitHub
+            if (DateTime.UtcNow >= nextCheck && cfg.Get().Features.UpdateCheck)
             {
                 await CheckAsync(ct);
                 // a failed check (GitHub answering 504 now and then) is retried soon instead of in 6 hours

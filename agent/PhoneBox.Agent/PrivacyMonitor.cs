@@ -11,7 +11,7 @@ public sealed record PrivacySnapshot(bool? Mic, bool? Camera, IReadOnlyList<stri
 ///  - Linux: ALSA capture streams that are running, and processes with a /dev/video* device open.
 ///  - macOS: what the menu bar's microphone and camera dots show, from CoreAudio and CoreMediaIO (see Unix/MacPrivacyProbe.cs).
 /// </summary>
-public sealed class PrivacyMonitor(ILogger<PrivacyMonitor> log) : BackgroundService
+public sealed class PrivacyMonitor(ILogger<PrivacyMonitor> log, ConfigStore? config = null) : BackgroundService
 {
     private volatile PrivacySnapshot? _snap;
 
@@ -22,6 +22,14 @@ public sealed class PrivacyMonitor(ILogger<PrivacyMonitor> log) : BackgroundServ
         string? lastLog = null;
         while (!ct.IsCancellationRequested)
         {
+            // switched off in Settings › Features: nothing is asked, and nothing is reported (null = unknown)
+            if (config?.Get().Features.Privacy == false)
+            {
+                _snap = null;
+                lastLog = null;
+                await Task.Delay(5000, ct);
+                continue;
+            }
             try
             {
                 var (mic, cam) = Read();

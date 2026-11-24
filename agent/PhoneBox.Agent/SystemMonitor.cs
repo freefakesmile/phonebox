@@ -94,11 +94,19 @@ public sealed partial class SystemMonitor(ILogger<SystemMonitor> log, ConfigStor
         return NvidiaLoop(ct);
     }
 
-    // Keeps nvidia-smi running and reads one line per GPU per second.
+    private bool NvidiaSmiOn() => config?.Get().Sensors.NvidiaSmi ?? true;
+
+    // Keeps nvidia-smi running and reads one line per GPU per second; switched off in Settings it is stopped and not started.
     private async Task NvidiaLoop(CancellationToken ct)
     {
         while (!ct.IsCancellationRequested)
         {
+            if (!NvidiaSmiOn())
+            {
+                _nvidia = null;
+                try { await Task.Delay(TimeSpan.FromSeconds(5), ct); } catch (OperationCanceledException) { return; }
+                continue;
+            }
             try
             {
                 var names = Gpus.ParseNvidiaNames(await RunAsync("nvidia-smi", "--query-gpu=index,name,driver_version --format=csv,noheader", ct));
@@ -115,12 +123,14 @@ public sealed partial class SystemMonitor(ILogger<SystemMonitor> log, ConfigStor
                     if (Gpus.ParseNvidiaLine(line, names) is not { } row) continue;
                     cards[row.Index] = row.Gpu;
                     _nvidia = cards.Values.ToList();
+                    if (!NvidiaSmiOn()) { try { p.Kill(); } catch { } break; }
                 }
             }
             catch (OperationCanceledException) { return; }
             catch (Exception ex) { log.LogDebug("nvidia-smi: {Msg}", ex.Message); }
             _nvidia = null;
-            await Task.Delay(TimeSpan.FromSeconds(10), ct);
+            if (!NvidiaSmiOn()) continue; // switched off: no 10 s wait, the check above takes over
+            try { await Task.Delay(TimeSpan.FromSeconds(10), ct); } catch (OperationCanceledException) { return; }
         }
     }
 

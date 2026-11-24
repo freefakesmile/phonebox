@@ -21,7 +21,8 @@ public sealed class PingMonitor(ConfigStore? config = null) : BackgroundService
         return snapshot is not null && snapshot.Host == CurrentHost() ? snapshot : null;
     }
 
-    private string? CurrentHost() => config is null ? DefaultHost : config.Get().Ping.Host;
+    // switched off in Settings › Features it is the same as no host: no packets, no snapshot
+    private string? CurrentHost() => config is null ? DefaultHost : config.Get() is { Features.Ping: true } c ? c.Ping.Host : null;
 
     protected override async Task ExecuteAsync(CancellationToken ct)
     {

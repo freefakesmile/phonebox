@@ -292,6 +292,9 @@ public sealed class SensorsConfig
     /// frametime-max"); empty = all of them. The others are still read (the CPU temperature, for one) but not sent, so
     /// a sensor that changes on every reading doesn't make the phone fetch the list again.</summary>
     public string AfterburnerKeys { get; set; } = "";
+    /// <summary>Keep nvidia-smi running for NVIDIA cards' power, fan and clocks. Off, the agent never starts it: GPU load,
+    /// memory and temperature still come from Windows (or from Afterburner's "ab.*" values).</summary>
+    public bool NvidiaSmi { get; set; } = true;
 }
 
 public sealed class FeaturesConfig
@@ -303,6 +306,18 @@ public sealed class FeaturesConfig
     public bool Processes { get; set; } = true;
     /// <summary>Now playing (Media widgets, media controls, media rules): off, the agent never asks the player.</summary>
     public bool Media { get; set; } = true;
+    /// <summary>Internet latency (Ping widget, ping rules): off, the agent sends no ICMP packets.</summary>
+    public bool Ping { get; set; } = true;
+    /// <summary>Microphone and camera in use (On air widget, mic/camera rules): off, the agent never asks Windows.</summary>
+    public bool Privacy { get; set; } = true;
+    /// <summary>GitHub pull requests and notifications through the gh CLI (Work widget, GitHub rules): off, gh is never run.</summary>
+    public bool GitHub { get; set; } = true;
+    /// <summary>Look for a new release every 6 hours: off, GitHub is asked only when Settings › Updates asks.</summary>
+    public bool UpdateCheck { get; set; } = true;
+    /// <summary>Seconds between two adb checks while the phone is plugged in and all is in place (its reverse rule, its
+    /// key). A phone plugged in again is noticed within this time; anything still to set up is checked every 4 s.</summary>
+    public int AdbSteadySec { get; set; } = DefaultAdbSec;
+    public const int DefaultAdbSec = 4, MaxAdbSec = 60;
 }
 
 public sealed class CursorConfig
@@ -718,6 +733,8 @@ public sealed partial class ConfigStore(string path)
         c.Cursor ??= new();
         c.Antigravity ??= new();
         c.Features ??= new();
+        c.Features.AdbSteadySec = c.Features.AdbSteadySec <= 0 ? FeaturesConfig.DefaultAdbSec
+            : Math.Clamp(c.Features.AdbSteadySec, FeaturesConfig.DefaultAdbSec, FeaturesConfig.MaxAdbSec);
         c.Sensors ??= new();
         c.PageKeys ??= new();
         c.PageKeys.Prev = string.IsNullOrWhiteSpace(c.PageKeys.Prev) ? PageKeysConfig.DefaultPrev : c.PageKeys.Prev.Trim();
